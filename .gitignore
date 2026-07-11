@@ -1,0 +1,27 @@
+# Build output
+bin/
+obj/
+publish/
+
+# Rider / VS user-local files
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# NCrunch, Resharper, etc.
+_NCrunch_*
+_ReSharper*/
+
+# Debug symbols
+*.pdb
+
+# Local logs, testing scratch
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Claude Code local config (permissions carry paths from other projects)
+.claude/
