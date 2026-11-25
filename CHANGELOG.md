@@ -98,6 +98,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **Tray notification when a transfer job fails.** A queued or scheduled
   job that fails now shows a balloon with the job name and rclone's last
   error line, once per run. It follows the Notifications setting.
+- **New files from transfer jobs show up on mounted drives at once.**
+  When a job finishes, any mount of the remote it wrote to re-reads the
+  folders the job touched.
 - **Help with Google's shared client_id retirement.** rclone's shared
   Google client_id will stop working during 2026. Google Drive and Google
   Photos remotes that still use it now show a warning with a link to
@@ -121,6 +124,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
   "rclone hung on the SFTP handshake" without re-running with a debugger.
 
 ### Changed
+- **Smarter folder caching on mounts.** Mounts of remotes that report
+  their own changes (Google Drive, OneDrive, Dropbox, Box, pCloud, and
+  crypt/alias remotes on top of them) now keep folder listings for 1000 h
+  and check for changes every 15 s, instead of re-listing every folder
+  every 15 s. Other remotes keep the 15 s listing cache. A
+  `--dir-cache-time` or `--poll-interval` in a mount's Extra flags still
+  wins.
 - **Runs on .NET 10.** .NET 8 support ended on 2026-11-10; the app now
   targets `net10.0-windows` (LTS, supported to November 2028). New
   `scripts/build.ps1` compiles the solution and runs the new test project.

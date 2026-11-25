@@ -345,6 +345,27 @@ namespace RcloneMount
             }
         }
 
+        // After a job ends, make any mount of the remote it wrote to re-list that folder
+        // (vfs/refresh), so new files show up without waiting for the long dir-cache to expire.
+        // Runs on the UI thread because `mounts` is only touched there.
+        private void OnJobRunFinished(JobRun run)
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke(new Action(() => _ = RefreshMountsAfterJobAsync(run))); }
+            catch (InvalidOperationException) { /* handle disposed mid-invoke */ }
+        }
+
+        private async Task RefreshMountsAfterJobAsync(JobRun run)
+        {
+            if (mountService is null) return;
+            foreach (var (mount, dir) in VfsRefresher.Targets(run.Spec, mounts.ToArray()))
+            {
+                if (mountService.GetRcPort(mount) is not int port) continue;
+                try { await VfsRefresher.RefreshAsync(port, dir); }
+                catch (Exception ex) { activityLog.Warn($"Could not refresh mount {mount.DriveLetter} after job '{run.DisplayName}': {ex.Message}"); }
+            }
+        }
+
         // Rebuild the ACTIVE strip from the JobQueueService snapshot + the
         // stats-poller's TransferInfo list. Called from both the queue's
         // RunsChanged event and each stats tick (~1s). Reconciles in place —

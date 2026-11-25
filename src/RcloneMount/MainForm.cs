@@ -629,13 +629,15 @@ namespace RcloneMount
             lblRcloneInstalled.ForeColor = Theme.TextPrimary;
             configService = new RcloneConfigService(rcloneInfo.ExecutablePath);
             mountService = new RcloneMountService(rcloneInfo.ExecutablePath);
+            mountService.Remotes = () => remotes;
             jobService = new RcloneJobService(rcloneInfo.ExecutablePath);
             // Keep a queue that still has active runs, or they vanish from the UI mid-transfer.
             if (jobQueue is null || !jobQueue.Snapshot().Any(r => r.IsActive))
             {
-                if (jobQueue is not null) jobQueue.RunsChanged -= OnJobQueueChanged;
+                if (jobQueue is not null) { jobQueue.RunsChanged -= OnJobQueueChanged; jobQueue.RunFinished -= OnJobRunFinished; }
                 jobQueue = new JobQueueService(jobService, activityLog);
                 jobQueue.RunsChanged += OnJobQueueChanged;
+                jobQueue.RunFinished += OnJobRunFinished;
             }
             // Let SettingsService resolve rclone.conf via `rclone config file` — respects
             // RCLONE_CONFIG and --config overrides instead of assuming the default path.
@@ -738,14 +740,16 @@ namespace RcloneMount
                     mountService.Dispose();
                 }
                 mountService = new RcloneMountService(info.ExecutablePath);
+                mountService.Remotes = () => remotes;
                 mountService.MountExited += MountService_MountExited;
                 jobService = new RcloneJobService(info.ExecutablePath);
                 // Keep a queue that still has active runs, or they vanish from the UI mid-transfer.
                 if (jobQueue is null || !jobQueue.Snapshot().Any(r => r.IsActive))
                 {
-                    if (jobQueue is not null) jobQueue.RunsChanged -= OnJobQueueChanged;
+                    if (jobQueue is not null) { jobQueue.RunsChanged -= OnJobQueueChanged; jobQueue.RunFinished -= OnJobRunFinished; }
                     jobQueue = new JobQueueService(jobService, activityLog);
                     jobQueue.RunsChanged += OnJobQueueChanged;
+                    jobQueue.RunFinished += OnJobRunFinished;
                 }
                 StartStatsPolling();
 

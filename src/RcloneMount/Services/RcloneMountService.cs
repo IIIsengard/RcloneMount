@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -25,6 +26,9 @@ namespace RcloneMount.Services
         private readonly ChildProcessJob job = new();
 
         public event EventHandler<MountExitedEventArgs>? MountExited;
+
+        // The configured remotes, so a mount can pick its dir-cache flags from the backend type.
+        public Func<IReadOnlyList<RcloneRemote>> Remotes { get; set; } = () => Array.Empty<RcloneRemote>();
 
         public RcloneMountService(string exePath)
         {
@@ -54,8 +58,6 @@ namespace RcloneMount.Services
             if (string.IsNullOrWhiteSpace(mount.DriveLetter))
                 throw new InvalidOperationException("Mount has no drive letter configured.");
 
-            var driveArg = mount.DriveLetter.TrimEnd(':') + ":";
-            var remoteArg = $"{mount.RemoteName}:{mount.RemotePath?.TrimStart('/') ?? string.Empty}";
             var rcPort = ReserveFreeLoopbackPort();
 
             var psi = new ProcessStartInfo
@@ -66,28 +68,8 @@ namespace RcloneMount.Services
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            psi.ArgumentList.Add("mount");
-            psi.ArgumentList.Add(remoteArg);
-            psi.ArgumentList.Add(driveArg);
-            psi.ArgumentList.Add("--vfs-cache-mode");
-            psi.ArgumentList.Add(string.IsNullOrWhiteSpace(mount.VfsCacheMode) ? "full" : mount.VfsCacheMode);
-            // rclone's --dir-cache-time default of 5m makes newly-uploaded files
-            // (or ones changed on the server outside the mount) invisible for
-            // minutes at a time. 15s is aggressive enough to feel live without
-            // hammering the backend — rclone only re-lists directories the user
-            // actually opens, so this doesn't scale with tree size.
-            psi.ArgumentList.Add("--dir-cache-time");
-            psi.ArgumentList.Add("15s");
-            psi.ArgumentList.Add("--rc");
-            psi.ArgumentList.Add("--rc-addr");
-            psi.ArgumentList.Add($"127.0.0.1:{rcPort}");
-            RcAuth.AddServerArgs(psi.ArgumentList);
-
-            if (!string.IsNullOrWhiteSpace(mount.ExtraFlags))
-            {
-                foreach (var token in SplitFlags(mount.ExtraFlags))
-                    psi.ArgumentList.Add(token);
-            }
+            foreach (var arg in BuildArgs(mount, rcPort, Remotes()))
+                psi.ArgumentList.Add(arg);
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             var mp = new MountProcess(proc, StderrRingSize, rcPort);
@@ -250,6 +232,32 @@ namespace RcloneMount.Services
             {
                 listener.Stop();
             }
+        }
+
+        // Everything after "mount". Defaults first, the user's ExtraFlags last: rclone takes the
+        // last occurrence of a repeated flag, so a user's --dir-cache-time etc. always wins.
+        internal static Collection<string> BuildArgs(Mount mount, int rcPort, IReadOnlyList<RcloneRemote> remotes)
+        {
+            var args = new Collection<string>
+            {
+                "mount",
+                $"{mount.RemoteName}:{mount.RemotePath?.TrimStart('/') ?? string.Empty}",
+                mount.DriveLetter.TrimEnd(':') + ":",
+                "--vfs-cache-mode",
+                string.IsNullOrWhiteSpace(mount.VfsCacheMode) ? "full" : mount.VfsCacheMode,
+            };
+            // rclone's default --dir-cache-time of 5m hides files changed outside the mount, so
+            // non-polling backends get 15 s; backends that poll for changes get a long cache.
+            foreach (var flag in DirCachePolicy.FlagsFor(mount.RemoteName, remotes))
+                args.Add(flag);
+            args.Add("--rc");
+            args.Add("--rc-addr");
+            args.Add($"127.0.0.1:{rcPort}");
+            RcAuth.AddServerArgs(args);
+            if (!string.IsNullOrWhiteSpace(mount.ExtraFlags))
+                foreach (var token in SplitFlags(mount.ExtraFlags))
+                    args.Add(token);
+            return args;
         }
 
         internal static string[] SplitFlags(string input)
