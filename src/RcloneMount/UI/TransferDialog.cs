@@ -48,6 +48,8 @@ namespace RcloneMount.UI
         private readonly TextBox txtBwLimit;
         private readonly Label lblScheduleLabel;
         private readonly TextBox txtSchedule;
+        private readonly Label lblScheduleError;
+        private readonly ToolTip scheduleTip = new();
         private readonly TextBox txtExtraFlags;
         private FilterRules filters = new();
         private readonly Button btnSave;
@@ -243,8 +245,18 @@ namespace RcloneMount.UI
                 Location = new Point(315, 321),
                 Width = 225,
                 Text = existingJob?.Schedule ?? "",
-                PlaceholderText = "e.g. daily 03:00 — app must be running",
+                PlaceholderText = "daily 03:00 · mon,wed 21:30 · every 6h",
             };
+            scheduleTip.SetToolTip(txtSchedule,
+                "Local time: " + Schedule.Syntax + ". Leave empty to run manually only. The app must be running when the time arrives.");
+            lblScheduleError = new Label
+            {
+                // Full dialog width so the format list is never ellipsised; ends at y 357, where the Extra flags box starts.
+                Location = new Point(16, 344), Size = new Size(524, 13), AutoEllipsis = true,
+                Font = new Font(SystemFonts.MessageBoxFont!.FontFamily, 7.5f),
+            };
+            txtSchedule.TextChanged += (_, _) => ShowScheduleError();
+            FormClosed += (_, _) => scheduleTip.Dispose();
             var lblExtraFlags = new Label { Text = "Extra rclone flags:", Location = new Point(16, 360), AutoSize = true };
             txtExtraFlags = new TextBox
             {
@@ -289,7 +301,7 @@ namespace RcloneMount.UI
                 chkOneWay, chkSizeOnly,
                 chkCheckAccess, lblConflict, cbConflict, lblMaxDelete, txtMaxDelete,
                 btnFilters, lblFiltersSummary,
-                lblBwLabel, txtBwLimit, lblScheduleLabel, txtSchedule,
+                lblBwLabel, txtBwLimit, lblScheduleLabel, txtSchedule, lblScheduleError,
                 lblExtraFlags, txtExtraFlags,
                 btnSave, btnInitialise, btnStart, btnCancel,
             });
@@ -301,6 +313,17 @@ namespace RcloneMount.UI
             cbSourceRemote.SelectedIndexChanged += (_, _) => SyncOptionVisibility();
             cbDestRemote.SelectedIndexChanged += (_, _) => SyncOptionVisibility();
             SyncOptionVisibility();
+            ShowScheduleError();
+        }
+
+        // Inline error under the Schedule box; set after DialogTheme.Apply so the colour sticks.
+        private string? ShowScheduleError()
+        {
+            Schedule.TryParse(txtSchedule.Text, out _, out var error);
+            lblScheduleError.ForeColor = Theme.Critical;
+            lblScheduleError.Text = error ?? "";
+            txtSchedule.AccessibleDescription = error ?? "";
+            return error;
         }
 
         private static readonly HashSet<int> CheckOpIndexes = new() { 3, 4 };
@@ -442,6 +465,12 @@ namespace RcloneMount.UI
             {
                 MessageBox.Show(this, "Give the job a name first.", "Save job", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 txtName.Focus();
+                return;
+            }
+            if (ShowScheduleError() is { } scheduleError)
+            {
+                MessageBox.Show(this, scheduleError + "\n\nFix the schedule or clear it to save this job.", "Save job", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtSchedule.Focus();
                 return;
             }
             var saveSourceRemote = ResolveRemoteName(cbSourceRemote);

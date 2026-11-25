@@ -11,9 +11,8 @@ using RcloneMount.UI;
 namespace RcloneMount
 {
     // In-process job scheduler. Ticks every 30 s and fires any saved TransferJob
-    // whose `Schedule` string says the target time has just passed. v1 supports
-    // ONLY "daily HH:MM" (24-hour local time). Anything else is silently ignored
-    // so a bad expression can't blow up the timer.
+    // whose `Schedule` text (see Models/Schedule.cs) says a run is due. An invalid
+    // expression is logged once and skipped so it can't blow up the timer.
     //
     // Deliberately in-process (not Windows Task Scheduler) because it's a lot
     // simpler and lets the same code path handle both scheduled and manual runs.
@@ -27,6 +26,7 @@ namespace RcloneMount
         // avoid piling up runs when one is slow (e.g. daily 03:00 job still
         // running when 03:30 tick fires).
         private readonly HashSet<string> scheduledInFlight = new(StringComparer.Ordinal);
+        private readonly HashSet<string> invalidScheduleWarned = new(StringComparer.Ordinal);
 
         private void StartScheduler()
         {
@@ -50,36 +50,42 @@ namespace RcloneMount
         private void SchedulerTick()
         {
             if (jobService is null) return;
-            var nowLocal = DateTime.Now;
+            var now = DateTimeOffset.Now;
             foreach (var job in jobs)
             {
-                if (!TryParseDailySchedule(job.Schedule, out var target)) continue;
+                if (string.IsNullOrWhiteSpace(job.Schedule)) continue;
+                if (!Schedule.TryParse(job.Schedule, out _, out var error))
+                {
+                    // Hand-edited or from a newer version: say so once instead of never running silently.
+                    if (invalidScheduleWarned.Add(job.Id))
+                        activityLog.Warn($"Job '{job.Name}' has an invalid schedule '{job.Schedule}' and will not run on a schedule: {error}");
+                    continue;
+                }
                 if (scheduledInFlight.Contains(job.Id)) continue;
 
-                // Today's target instant (local). If it's still in the future,
-                // wait — that's what the next tick after 03:00 is for.
-                var todayTarget = DateTime.Today + target;
-                if (nowLocal < todayTarget) continue;
+                // An unanchored "every Nh" job starts its clock now instead of running at once.
+                if (Schedule.AnchorIfNew(job, now)) { _ = SaveSettingsAsync(); continue; }
 
-                // Has already fired today? Compare in LOCAL time — the user set
-                // the time in local, and "today" is the natural boundary.
-                if (job.LastScheduledFireUtc is { } last && last.ToLocalTime().Date >= DateTime.Today) continue;
-
-                _ = FireScheduledAsync(job);
+                // Due when the next slot (after the last fire; today's missed slot catches up at
+                // launch) is not in the future. Firing stamps LastScheduledFireUtc, so it never repeats.
+                if (Schedule.NextRunOf(job, now) is { } next && next <= now)
+                    _ = FireScheduledAsync(job, Schedule.FireStamp(job, now));
             }
         }
 
-        private Task FireScheduledAsync(TransferJob job)
+        // stampUtc = the LastScheduledFireUtc to record (null = now, e.g. resuming an interrupted job).
+        private Task FireScheduledAsync(TransferJob job, DateTime? stampUtc = null)
         {
             if (jobQueue is null) return Task.CompletedTask;
             scheduledInFlight.Add(job.Id);
             var spec = BuildSpecFromSaved(job);
 
             activityLog.Info($"Scheduled job '{job.Name}' enqueued ({spec.OperationVerb} {spec.SourceSpec} → {spec.DestSpec}).");
-            job.LastScheduledFireUtc = DateTime.UtcNow;
+            job.LastScheduledFireUtc = stampUtc ?? DateTime.UtcNow;
             job.InFlight = true;
             job.InFlightStartedUtc = DateTime.UtcNow;
             _ = SaveSettingsAsync();
+            RefreshJobsList();
 
             // Hand off to the queue and clear the scheduler's in-flight guard when
             // the run finishes. The queue's own MaxConcurrent (default 1) enforces
@@ -102,10 +108,7 @@ namespace RcloneMount
                     try
                     {
                         scheduledInFlight.Remove(job.Id);
-                        job.InFlight = false;
-                        job.InFlightStartedUtc = null;
-                        job.LastRunUtc = DateTime.UtcNow;
-                        job.LastResultKind = run.Outcome ?? "Unknown";
+                        CompleteRun(jobs, job, run.Outcome ?? "Unknown", DateTime.UtcNow);
                         if (run.State == JobRunState.Failed)
                             activityLog.Warn($"Scheduled job '{job.Name}' failed: {run.LastError ?? run.Outcome}");
                         else if (run.State == JobRunState.Cancelled)
@@ -119,6 +122,18 @@ namespace RcloneMount
                 }));
             });
             return Task.CompletedTask;
+        }
+
+        // Record a finished run on the CURRENT saved job: the Edit dialog replaces the job object
+        // while a run is in progress, so the captured one may no longer be in the list.
+        internal static TransferJob CompleteRun(List<TransferJob> jobs, TransferJob captured, string outcome, DateTime nowUtc)
+        {
+            var cur = jobs.Find(j => j.Id == captured.Id) ?? captured;
+            cur.InFlight = false;
+            cur.InFlightStartedUtc = null;
+            cur.LastRunUtc = nowUtc;
+            cur.LastResultKind = outcome;
+            return cur;
         }
 
         // Saved job → runnable spec for scheduled and resumed runs. Applies the same
@@ -202,24 +217,6 @@ namespace RcloneMount
                 activityLog.Info($"Resuming interrupted job '{j.Name}'.");
                 _ = FireScheduledAsync(j);
             }
-        }
-
-        // "daily 03:00" → 03:00. Case-insensitive on the "daily " prefix; hours
-        // must be 0–23 and minutes 0–59. Anything else returns false so the
-        // caller can silently skip a broken expression.
-        internal static bool TryParseDailySchedule(string? expression, out TimeSpan target)
-        {
-            target = default;
-            if (string.IsNullOrWhiteSpace(expression)) return false;
-            var s = expression.Trim();
-            if (!s.StartsWith("daily ", StringComparison.OrdinalIgnoreCase)) return false;
-            var hhmm = s.Substring(6).Trim();
-            var parts = hhmm.Split(':');
-            if (parts.Length != 2) return false;
-            if (!int.TryParse(parts[0], out var h) || h < 0 || h > 23) return false;
-            if (!int.TryParse(parts[1], out var m) || m < 0 || m > 59) return false;
-            target = new TimeSpan(h, m, 0);
-            return true;
         }
     }
 }

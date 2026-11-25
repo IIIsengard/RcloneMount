@@ -5,7 +5,7 @@ RcloneMount is a Windows tray app for [rclone](https://rclone.org). It does thes
 - Mounts rclone remotes as drive letters through [WinFsp](https://winfsp.dev).
 - Mounts the remotes again after sleep or a lost network connection.
 - Runs a transfer queue with copy, sync, move, bisync and check jobs.
-- Runs saved jobs on a daily schedule.
+- Runs saved jobs on a schedule (daily, weekdays, chosen days, or every N hours).
 - Backs up its settings and `rclone.conf`, and restores them.
 - Exports a diagnostic bundle with secrets removed, to attach to a bug report.
 

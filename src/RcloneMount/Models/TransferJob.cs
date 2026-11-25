@@ -53,9 +53,9 @@ namespace RcloneMount.Models
         // Escape hatch so any rclone option works without a dedicated field. Empty = none.
         public string ExtraFlags { get; set; } = string.Empty;
 
-        // Schedule expression. v1 supports only "daily HH:MM" (24-hour local time)
-        // — anything else is ignored. Empty = manual only. In-process — needs the
-        // app to be running when the time hits.
+        // Schedule expression, parsed by Schedule.TryParse ("daily 03:00", "weekdays 03:00",
+        // "mon,wed 21:30", "every 6h"; 24-hour local time). Empty = manual only. In-process —
+        // needs the app to be running when the time hits.
         public string Schedule { get; set; } = string.Empty;
         // Watermark used to avoid firing twice per interval; the scheduler updates
         // this when it kicks a run off.

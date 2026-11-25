@@ -101,7 +101,19 @@ namespace RcloneMount.UI
             {
                 lblLast.Text = "never run";
             }
+            lblLast.Text += NextRunLabel(job);
             RepositionActions();
+        }
+
+        private static string NextRunLabel(TransferJob job)
+        {
+            if (string.IsNullOrWhiteSpace(job.Schedule)) return "";
+            if (!Schedule.TryParse(job.Schedule, out _, out _)) return "  ·  invalid schedule";
+            if (Schedule.NextRunOf(job, DateTimeOffset.Now) is not { } next) return "";
+            var local = next.ToLocalTime();
+            if (local <= DateTimeOffset.Now) return "  ·  next run due now";
+            // Weekday + time, no "today"/"tomorrow": those go stale after midnight until a refresh.
+            return $"  ·  next run {local.ToString(local - DateTimeOffset.Now < TimeSpan.FromDays(6) ? "ddd HH:mm" : "ddd d MMM HH:mm")}";
         }
 
         private void RepositionActions()

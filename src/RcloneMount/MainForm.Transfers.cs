@@ -524,15 +524,29 @@ namespace RcloneMount
             RefreshJobsList();
         }
 
-        // Insert-or-replace by Id. Called by TransferDialog via saveCallback on both
-        // an explicit Save click and after a run finishes (to record LastRunUtc).
+        // Insert-or-replace by Id. Called by TransferDialog via saveCallback on an
+        // explicit Save / Update click.
         private void UpsertJob(TransferJob incoming)
         {
-            var idx = jobs.FindIndex(j => j.Id == incoming.Id);
-            if (idx >= 0) jobs[idx] = incoming;
-            else jobs.Add(incoming);
+            UpsertInto(jobs, incoming);
             _ = SaveSettingsAsync();
             RefreshJobsList();
+        }
+
+        internal static void UpsertInto(List<TransferJob> jobs, TransferJob incoming)
+        {
+            var idx = jobs.FindIndex(j => j.Id == incoming.Id);
+            if (idx < 0) { jobs.Add(incoming); return; }
+            // The dialog only knows the editable fields; keep the run history and the schedule
+            // watermark, or editing a job would make it fire again today. A run still in progress
+            // is recorded on the new object by CompleteRun.
+            var old = jobs[idx];
+            incoming.LastScheduledFireUtc = old.LastScheduledFireUtc;
+            incoming.LastRunUtc = old.LastRunUtc;
+            incoming.LastResultKind = old.LastResultKind;
+            incoming.InFlight = old.InFlight;
+            incoming.InFlightStartedUtc = old.InFlightStartedUtc;
+            jobs[idx] = incoming;
         }
 
         private static TransferOperation ParseOp(string s) => s switch

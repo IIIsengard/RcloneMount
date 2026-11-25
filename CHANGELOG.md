@@ -32,6 +32,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **A schedule the app cannot read is no longer silently ignored.** The
+  job dialog shows what is wrong and will not save until the schedule is
+  fixed or cleared. A bad schedule that is already saved is reported in
+  the activity log.
+- **Editing a saved job no longer resets its run record.** After an edit,
+  a daily job could run a second time the same day, and editing a job
+  while it was running lost that run's result.
 - **A failed rclone update no longer leaves the app unable to mount.**
   Mounting stayed disabled until restart if the download or file swap
   failed; rclone is now re-detected either way. Updates also wait while a
@@ -80,6 +87,12 @@ changes (e.g. `settings.json` shape changes that need a migration).
   in place; only new rows are constructed, only vanished rows disposed.
 
 ### Added
+- **More schedule types.** Besides `daily HH:MM`, jobs now accept
+  `weekdays HH:MM`, chosen days such as `mon,wed 21:30`, and `every 6h`.
+  The Jobs list shows each job's next run. Daily and day-based schedules
+  run at most once a day, and `every Nh` keeps an exact cadence that
+  starts when it is first saved, so an upgrade never starts a run by
+  surprise. Existing `daily HH:MM` schedules keep working unchanged.
 - **Help with Google's shared client_id retirement.** rclone's shared
   Google client_id will stop working during 2026. Google Drive and Google
   Photos remotes that still use it now show a warning with a link to

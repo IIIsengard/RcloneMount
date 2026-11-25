@@ -29,23 +29,6 @@ public class ParserTests
         Assert.Equal("size 3", m.Groups["detail"].Value);
     }
 
-    [Theory]
-    [InlineData("daily 03:00", 3, 0)]
-    [InlineData("Daily 23:59", 23, 59)]
-    public void TryParseDailySchedule_AcceptsValidTimes(string expr, int h, int m)
-    {
-        Assert.True(MainForm.TryParseDailySchedule(expr, out var target));
-        Assert.Equal(new TimeSpan(h, m, 0), target);
-    }
-
-    [Theory]
-    [InlineData("daily 24:00")]
-    [InlineData("weekly 03:00")]
-    public void TryParseDailySchedule_RejectsInvalid(string expr)
-    {
-        Assert.False(MainForm.TryParseDailySchedule(expr, out _));
-    }
-
     [Fact]
     public void RedactSensitiveFlags_HidesSecrets_KeepsOtherFlags()
     {
