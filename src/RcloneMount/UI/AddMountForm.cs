@@ -5,11 +5,16 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using RcloneMount.Models;
+using RcloneMount.Services;
 
 namespace RcloneMount.UI
 {
     public class AddMountForm : Form
     {
+        internal const string MaxSizeHint = "e.g. 10G, 500M, off. A bare number is KiB.";
+        internal const string MinFreeHint = "e.g. 20G. A bare number is KiB.";
+        internal const int HintBoxHeight = 52;
+
         private readonly IReadOnlyList<RcloneRemote> remotes;
         private readonly IReadOnlyList<Mount> otherMounts;
         private readonly ThemedDropDown cbRemote;
@@ -17,6 +22,10 @@ namespace RcloneMount.UI
         private readonly ThemedDropDown cbDriveLetter;
         private readonly ThemedDropDown cbVfsMode;
         private readonly TextBox txtExtraFlags;
+        private readonly TextBox txtCacheDir;
+        private readonly TextBox txtCacheMax;
+        private readonly TextBox txtCacheMinFree;
+        private readonly Label lblError;
         private readonly CheckBox chkAutoMount;
         private readonly Button btnOk;
         private readonly Button btnCancel;
@@ -34,7 +43,7 @@ namespace RcloneMount.UI
                 .ToList();
             Icon = AppIcon.Get();
             Text = existing is null ? "Add Mount" : "Edit Mount";
-            ClientSize = new Size(460, 300);
+            ClientSize = new Size(460, 540);
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -61,11 +70,30 @@ namespace RcloneMount.UI
             var lblExtra = new Label { Text = "Extra flags:", Location = new Point(12, 166), AutoSize = true };
             txtExtraFlags = new TextBox { Location = new Point(140, 163), Width = 300, Text = existing?.ExtraFlags ?? "" };
 
-            chkAutoMount = new CheckBox { Text = "Auto-mount at startup", Location = new Point(140, 195), AutoSize = true, Checked = existing?.AutoMount ?? false };
+            // Empty = no flag, so rclone's own default applies (uncapped cache in its default folder).
+            var lblCacheDir = new Label { Text = "Cache folder:", Location = new Point(12, 203), AutoSize = true };
+            txtCacheDir = new TextBox { Location = new Point(140, 200), Width = 215, Text = existing?.CacheDir ?? "" };
+            var btnBrowse = new Button { Text = "Browse...", Location = new Point(362, 198), Size = new Size(78, 27) };
+            btnBrowse.Click += (_, _) =>
+            {
+                using var dlg = new FolderBrowserDialog { Description = "Choose a folder for this mount's cache.", UseDescriptionForTitle = true };
+                if (dlg.ShowDialog(this) == DialogResult.OK) txtCacheDir.Text = dlg.SelectedPath;
+            };
+            var lblCacheMax = new Label { Text = "Max cache size:", Location = new Point(12, 240), AutoSize = true };
+            txtCacheMax = new TextBox { Location = new Point(140, 237), Width = 90, Text = existing?.VfsCacheMaxSize ?? "" };
+            // Hints get their own wrapping box under the field so large text or DPI scaling cannot push them off the form.
+            var lblCacheMaxHint = new Label { Text = MaxSizeHint, Location = new Point(140, 262), Size = new Size(308, HintBoxHeight), AutoSize = false };
+            var lblCacheFree = new Label { Text = "Keep disk free:", Location = new Point(12, 325), AutoSize = true };
+            txtCacheMinFree = new TextBox { Location = new Point(140, 322), Width = 90, Text = existing?.VfsCacheMinFreeSpace ?? "" };
+            var lblCacheFreeHint = new Label { Text = MinFreeHint, Location = new Point(140, 347), Size = new Size(308, HintBoxHeight), AutoSize = false };
+            lblError = new Label { Location = new Point(12, 436), Size = new Size(436, 50), Visible = false, AutoSize = false };
+            btnBrowse.AccessibleName = "Browse for cache folder";
 
-            btnOk = new Button { Text = "OK", Location = new Point(250, 250), Size = new Size(90, 30), DialogResult = DialogResult.None };
+            chkAutoMount = new CheckBox { Text = "Auto-mount at startup", Location = new Point(140, 410), AutoSize = true, Checked = existing?.AutoMount ?? false };
+
+            btnOk = new Button { Text = "OK", Location = new Point(250, 496), Size = new Size(90, 30), DialogResult = DialogResult.None };
             btnOk.Click += BtnOk_Click;
-            btnCancel = new Button { Text = "Cancel", Location = new Point(350, 250), Size = new Size(90, 30), DialogResult = DialogResult.Cancel };
+            btnCancel = new Button { Text = "Cancel", Location = new Point(350, 496), Size = new Size(90, 30), DialogResult = DialogResult.Cancel };
 
             AcceptButton = btnOk;
             CancelButton = btnCancel;
@@ -77,12 +105,19 @@ namespace RcloneMount.UI
                 lblDrive, cbDriveLetter,
                 lblVfs, cbVfsMode,
                 lblExtra, txtExtraFlags,
+                lblCacheDir, txtCacheDir, btnBrowse,
+                lblCacheMax, txtCacheMax, lblCacheMaxHint,
+                lblCacheFree, txtCacheMinFree, lblCacheFreeHint,
+                lblError,
                 chkAutoMount,
                 btnOk, btnCancel
             });
 
             DialogTheme.Apply(this);
             RoundedButtons.Apply(this);
+            // DialogTheme paints every label in the primary colour; recolour these after it ran.
+            lblCacheMaxHint.ForeColor = lblCacheFreeHint.ForeColor = Theme.TextSecondary;
+            lblError.ForeColor = Theme.Critical;
 
             if (existing is not null)
             {
@@ -148,6 +183,23 @@ namespace RcloneMount.UI
                 return;
             }
 
+            // Check each field so focus and the screen-reader description go to the one that is wrong.
+            var checks = new (TextBox box, string? error)[]
+            {
+                (txtCacheDir, VfsCacheLimits.ValidateDir(txtCacheDir.Text)),
+                (txtCacheMax, VfsCacheLimits.ValidateSize(txtCacheMax.Text)),
+                (txtCacheMinFree, VfsCacheLimits.ValidateSize(txtCacheMinFree.Text)),
+            };
+            foreach (var (box, error) in checks) box.AccessibleDescription = error ?? "";
+            var bad = checks.FirstOrDefault(c => c.error is not null);
+            lblError.Visible = bad.error is not null;
+            if (bad.error is not null)
+            {
+                lblError.Text = bad.error;
+                bad.box.Focus();
+                return;
+            }
+
             var remoteName = remotes[cbRemote.SelectedIndex].Name;
 
             Result = new Mount
@@ -157,6 +209,9 @@ namespace RcloneMount.UI
                 DriveLetter = cbDriveLetter.SelectedItem!.ToString()!,
                 VfsCacheMode = cbVfsMode.SelectedItem?.ToString() ?? "full",
                 ExtraFlags = txtExtraFlags.Text.Trim(),
+                CacheDir = txtCacheDir.Text.Trim(),
+                VfsCacheMaxSize = txtCacheMax.Text.Trim(),
+                VfsCacheMinFreeSpace = txtCacheMinFree.Text.Trim(),
                 AutoMount = chkAutoMount.Checked
             };
             DialogResult = DialogResult.OK;

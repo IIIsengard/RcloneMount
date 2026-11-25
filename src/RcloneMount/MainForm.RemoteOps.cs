@@ -62,7 +62,7 @@ namespace RcloneMount
                 }
                 catch (Exception ex)
                 {
-                    SetStatusError($"Auto-mount for {m.DriveLetter} failed.", ex);
+                    SetStatusError($"Auto-mount of {m.RemoteName} on {m.DriveLetter} failed.", ex);
                     failed.Add($"{m.RemoteName} → {m.DriveLetter}");
                 }
             }

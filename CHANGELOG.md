@@ -98,6 +98,10 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **Tray notification when a transfer job fails.** A queued or scheduled
   job that fails now shows a balloon with the job name and rclone's last
   error line, once per run. It follows the Notifications setting.
+- **VFS cache limits per mount.** The mount editor can set the cache
+  folder, a maximum cache size (for example `10G`) and the minimum free
+  disk space to keep. Values are checked against rclone's own size rules
+  before saving; blank leaves rclone's default.
 - **New files from transfer jobs show up on mounted drives at once.**
   When a job finishes, any mount of the remote it wrote to re-reads the
   folders the job touched.

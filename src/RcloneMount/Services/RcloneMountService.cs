@@ -250,6 +250,17 @@ namespace RcloneMount.Services
             // non-polling backends get 15 s; backends that poll for changes get a long cache.
             foreach (var flag in DirCachePolicy.FlagsFor(mount.RemoteName, remotes))
                 args.Add(flag);
+            // The editor validates these; a hand-edited settings.json must not reach rclone as junk.
+            foreach (var (flag, value, error) in new[]
+            {
+                ("--cache-dir", mount.CacheDir, VfsCacheLimits.ValidateDir(mount.CacheDir)),
+                ("--vfs-cache-max-size", mount.VfsCacheMaxSize, VfsCacheLimits.ValidateSize(mount.VfsCacheMaxSize)),
+                ("--vfs-cache-min-free-space", mount.VfsCacheMinFreeSpace, VfsCacheLimits.ValidateSize(mount.VfsCacheMinFreeSpace)),
+            })
+            {
+                if (error is not null) throw new InvalidOperationException($"Mount cache setting {flag}: {error}");
+                if (!string.IsNullOrWhiteSpace(value)) { args.Add(flag); args.Add(value.Trim()); }
+            }
             args.Add("--rc");
             args.Add("--rc-addr");
             args.Add($"127.0.0.1:{rcPort}");

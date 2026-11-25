@@ -43,6 +43,9 @@ namespace RcloneMount
                 selected.DriveLetter = dlg.Result.DriveLetter;
                 selected.VfsCacheMode = dlg.Result.VfsCacheMode;
                 selected.ExtraFlags = dlg.Result.ExtraFlags;
+                selected.CacheDir = dlg.Result.CacheDir;
+                selected.VfsCacheMaxSize = dlg.Result.VfsCacheMaxSize;
+                selected.VfsCacheMinFreeSpace = dlg.Result.VfsCacheMinFreeSpace;
                 selected.AutoMount = dlg.Result.AutoMount;
 
                 if (!selected.AutoMount) CancelRetry(selected.Id);
