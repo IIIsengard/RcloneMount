@@ -80,6 +80,12 @@ changes (e.g. `settings.json` shape changes that need a migration).
   in place; only new rows are constructed, only vanished rows disposed.
 
 ### Added
+- **Help with Google's shared client_id retirement.** rclone's shared
+  Google client_id will stop working during 2026. Google Drive and Google
+  Photos remotes that still use it now show a warning with a link to
+  rclone's "Making your own client_id" steps, where to paste the id and
+  secret (Edit, then Reconnect), and a reminder to publish the Google app,
+  because sign-ins for apps left in Testing expire after a week.
 - **Installer with in-app updates.** RcloneMount now ships as a Velopack
   `Setup.exe` (plus a portable zip). Settings → **Install Update** downloads
   the new version, closes cleanly (unmounting drives), installs and

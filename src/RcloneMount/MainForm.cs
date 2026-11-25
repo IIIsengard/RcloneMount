@@ -88,6 +88,7 @@ namespace RcloneMount
         private Panel detailBadge = null!;
         private Label detailTitleLabel = null!;
         private Label detailSubtitleLabel = null!;
+        private LinkLabel clientIdWarning = null!;
         private Button detailReconnectRemoteBtn = null!;
         private Button detailEditRemoteBtn = null!;
         private Button detailDeleteRemoteBtn = null!;

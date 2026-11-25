@@ -252,6 +252,26 @@ namespace RcloneMount
             mountsHeaderPanel.Resize += (_, _) => PositionAddMountBtn();
             mountsHeaderPanel.HandleCreated += (_, _) => PositionAddMountBtn();
 
+            const string clientIdLink = "Making your own client_id";
+            clientIdWarning = new LinkLabel
+            {
+                Text = "rclone is retiring the shared Google client_id this remote uses; its docs say it will stop working during 2026. "
+                     + $"Create your own: {clientIdLink} (rclone guide). Then click Edit, paste the Client ID and Client Secret, save, and click Reconnect. "
+                     + "Publish the Google app (Audience > Publish App); apps left in Testing lose sign-in after a week.",
+                Padding = new Padding(10, 6, 10, 6),
+                BackColor = Theme.WarnTint,
+                ForeColor = Theme.TextPrimary,
+                LinkColor = Theme.Accent,
+                ActiveLinkColor = Theme.AccentHover,
+                VisitedLinkColor = Theme.Accent,
+                Font = new Font(Font.FontFamily, 8.75f),
+                Visible = false
+            };
+            clientIdWarning.LinkArea = new LinkArea(clientIdWarning.Text.IndexOf(clientIdLink, StringComparison.Ordinal), clientIdLink.Length);
+            clientIdWarning.LinkClicked += (_, _) => OpenUrl(GetSelectedRemote()?.Type == "google photos"
+                ? "https://rclone.org/googlephotos/#making-your-own-client-id"
+                : "https://rclone.org/drive/#making-your-own-client-id");
+
             emptyStateLabel = new Label
             {
                 Text = "Select a remote on the left, or click \"+ New remote\" to add one.",
@@ -277,9 +297,11 @@ namespace RcloneMount
             };
             detailHeader.Margin = new Padding(0, 0, 0, 8);
             emptyStateLabel.Margin = new Padding(0, 0, 0, 8);
+            clientIdWarning.Margin = new Padding(0, 0, 0, 8);
             mountsCard.Margin = new Padding(0, 0, 0, 12);
             settingsCard.Margin = new Padding(0, 0, 0, 0);
             detailStack.Controls.Add(detailHeader);
+            detailStack.Controls.Add(clientIdWarning);
             detailStack.Controls.Add(emptyStateLabel);
             detailStack.Controls.Add(mountsCard);
             detailStack.Controls.Add(settingsCard);
@@ -293,6 +315,9 @@ namespace RcloneMount
                 if (w <= 0) return;
                 detailHeader.Width = w;
                 emptyStateLabel.Width = w;
+                clientIdWarning.Width = w;
+                // Height follows the wrapped text so no step is clipped at any width, DPI or copy edit.
+                clientIdWarning.Height = clientIdWarning.GetPreferredSize(new Size(w, 0)).Height;
                 settingsCard.Width = w;
                 mountsCard.Width = w;
                 detailStack.Width = w;
@@ -390,6 +415,7 @@ namespace RcloneMount
                     detailHeader.Visible = false;
                     settingsCard.Visible = false;
                     mountsCard.Visible = false;
+                    clientIdWarning.Visible = false;
                     emptyStateLabel.Visible = true;
                     UpdateActionButtons();
                     return;
@@ -403,6 +429,7 @@ namespace RcloneMount
                 // Unconditionally re-enabling here would let it flash back on for every
                 // mount-state tick or stats poll.
 
+                clientIdWarning.Visible = remote.UsesSharedGoogleClientId;
                 detailBadge.Invalidate();
                 detailTitleLabel.Text = remote.Name;
 
