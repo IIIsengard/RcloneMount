@@ -320,9 +320,29 @@ namespace RcloneMount
             if (IsDisposed || !IsHandleCreated) return;
             try
             {
-                BeginInvoke(new Action(RefreshActiveList));
+                BeginInvoke(new Action(() =>
+                {
+                    RefreshActiveList();
+                    NotifyNewFailures();
+                }));
             }
             catch (InvalidOperationException) { /* handle disposed mid-invoke */ }
+        }
+
+        // One tray balloon per failed run (scheduled, queued from a dialog, or retried), via
+        // Notify so the Notifications toggle applies. Runs are marked seen even when the toggle
+        // is off, so switching it on later does not replay old failures.
+        private readonly HashSet<string> failureNotified = new(StringComparer.Ordinal);
+        private void NotifyNewFailures()
+        {
+            if (jobQueue is null) return;
+            foreach (var run in jobQueue.Snapshot())
+            {
+                if (run.State != Models.JobRunState.Failed || !failureNotified.Add(run.Id)) continue;
+                var why = run.LastError ?? run.Outcome ?? "unknown error";
+                if (why.Length > 150) why = why[..150] + "…";
+                Notify("Transfer job failed", $"{run.DisplayName}: {why}", ToolTipIcon.Error, 8000);
+            }
         }
 
         // Rebuild the ACTIVE strip from the JobQueueService snapshot + the

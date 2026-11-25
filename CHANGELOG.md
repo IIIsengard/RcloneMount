@@ -32,6 +32,8 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **Cancelling a running job now shows it as Cancelled.** It used to end
+  as Failed or Completed, depending on how rclone exited.
 - **A schedule the app cannot read is no longer silently ignored.** The
   job dialog shows what is wrong and will not save until the schedule is
   fixed or cleared. A bad schedule that is already saved is reported in
@@ -93,6 +95,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   run at most once a day, and `every Nh` keeps an exact cadence that
   starts when it is first saved, so an upgrade never starts a run by
   surprise. Existing `daily HH:MM` schedules keep working unchanged.
+- **Tray notification when a transfer job fails.** A queued or scheduled
+  job that fails now shows a balloon with the job name and rclone's last
+  error line, once per run. It follows the Notifications setting.
 - **Help with Google's shared client_id retirement.** rclone's shared
   Google client_id will stop working during 2026. Google Drive and Google
   Photos remotes that still use it now show a warning with a link to

@@ -49,7 +49,10 @@ namespace RcloneMount.Services
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
 
-        public static string HistoryPath => Path.Combine(
+        // Tests redirect this so a real job run never appends to the user's own history.
+        internal static string? PathOverride { get; set; }
+
+        public static string HistoryPath => PathOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             AppFolderName,
             "transfers.jsonl");

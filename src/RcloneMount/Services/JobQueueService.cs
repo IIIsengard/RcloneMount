@@ -172,19 +172,21 @@ namespace RcloneMount.Services
             lock (gate)
             {
                 run.FinishedUtc = DateTime.UtcNow;
+                // Cancel() on a Running run only signals the CTS; rclone then exits with whatever
+                // code the quit/kill gives. A user cancel is never a failure, so check it first.
+                var cancelRequested = run.Cts?.IsCancellationRequested == true;
                 try { run.Cts?.Dispose(); } catch { }
                 run.Cts = null;
-                if (error is not null)
+                if (cancelRequested)
+                {
+                    run.State = JobRunState.Cancelled;
+                    run.Outcome = "Cancelled";
+                }
+                else if (error is not null)
                 {
                     run.State = JobRunState.Failed;
                     run.Outcome = "Failed to start";
                     run.LastError = error.Message;
-                }
-                else if (run.State == JobRunState.Cancelled)
-                {
-                    // Queued-then-cancelled races are handled in Cancel(); if we
-                    // got here the CTS fired mid-run — mark as cancelled properly.
-                    run.Outcome = "Cancelled";
                 }
                 else if (result!.ExitCode == 0)
                 {
