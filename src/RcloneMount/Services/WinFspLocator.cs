@@ -53,12 +53,30 @@ namespace RcloneMount.Services
             try
             {
                 var fvi = FileVersionInfo.GetVersionInfo(dll);
-                return !string.IsNullOrEmpty(fvi.ProductVersion) ? fvi.ProductVersion : fvi.FileVersion;
+                // FileVersion is numeric (e.g. "2.1.25156.24000"); ProductVersion is the
+                // release name (e.g. "2025"). Combine them so the UI shows "2.1 (2025)".
+                var numeric = ShortenNumericVersion(fvi.FileVersion);
+                var product = (fvi.ProductVersion ?? "").Trim();
+                if (!string.IsNullOrEmpty(numeric) && !string.IsNullOrEmpty(product) &&
+                    !product.Equals(numeric, StringComparison.OrdinalIgnoreCase) &&
+                    !numeric.StartsWith(product, StringComparison.OrdinalIgnoreCase))
+                    return $"{numeric} ({product})";
+                if (!string.IsNullOrEmpty(numeric)) return numeric;
+                return string.IsNullOrEmpty(product) ? null : product;
             }
             catch
             {
                 return null;
             }
+        }
+
+        private static string? ShortenNumericVersion(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var parts = raw.Split('.');
+            if (parts.Length >= 2 && int.TryParse(parts[0], out _) && int.TryParse(parts[1], out _))
+                return $"{parts[0]}.{parts[1]}";
+            return raw.Trim();
         }
 
         private static System.Collections.Generic.IEnumerable<string> DefaultDirs()

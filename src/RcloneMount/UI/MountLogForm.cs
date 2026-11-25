@@ -51,6 +51,8 @@ namespace RcloneMount.UI
             Controls.Add(lblSubject);
             AcceptButton = btnClose;
             CancelButton = btnClose;
+            DialogTheme.Apply(this);
+            RoundedButtons.Apply(this);
         }
     }
 }

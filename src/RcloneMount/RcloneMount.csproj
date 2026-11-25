@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -9,10 +9,22 @@
     <RootNamespace>RcloneMount</RootNamespace>
     <Product>RcloneMount</Product>
     <AssemblyTitle>RcloneMount</AssemblyTitle>
-    <Version>1.0.0</Version>
+    <Version>1.0.22</Version>
     <Company>RcloneMount</Company>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- UI is built in code, never in the WinForms designer, so designer-serialization hints add nothing. -->
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.15" />
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RcloneMount.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="provider-icons\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>

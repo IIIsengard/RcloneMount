@@ -16,7 +16,7 @@ namespace RcloneMount.Services
     {
         private const int StderrRingSize = 40;
         private static readonly TimeSpan GracefulShutdownTimeout = TimeSpan.FromSeconds(6);
-        private static readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(3) };
+        private static readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(3), DefaultRequestHeaders = { Authorization = RcAuth.Header } };
 
         private readonly string exePath;
         private readonly ConcurrentDictionary<string, MountProcess> processes = new();
@@ -38,6 +38,11 @@ namespace RcloneMount.Services
 
         public IReadOnlyList<string> GetRecentStderr(Mount mount) =>
             processes.TryGetValue(mount.Id, out var mp) ? mp.SnapshotStderr() : Array.Empty<string>();
+
+        // Returns the rclone RC control port for a running mount, or null if the mount
+        // isn't currently up. Consumers use this to POST /core/stats etc for live telemetry.
+        public int? GetRcPort(Mount mount) =>
+            processes.TryGetValue(mount.Id, out var mp) && !mp.Process.HasExited ? mp.RcPort : (int?)null;
 
         public Task MountAsync(Mount mount)
         {
@@ -66,10 +71,17 @@ namespace RcloneMount.Services
             psi.ArgumentList.Add(driveArg);
             psi.ArgumentList.Add("--vfs-cache-mode");
             psi.ArgumentList.Add(string.IsNullOrWhiteSpace(mount.VfsCacheMode) ? "full" : mount.VfsCacheMode);
+            // rclone's --dir-cache-time default of 5m makes newly-uploaded files
+            // (or ones changed on the server outside the mount) invisible for
+            // minutes at a time. 15s is aggressive enough to feel live without
+            // hammering the backend — rclone only re-lists directories the user
+            // actually opens, so this doesn't scale with tree size.
+            psi.ArgumentList.Add("--dir-cache-time");
+            psi.ArgumentList.Add("15s");
             psi.ArgumentList.Add("--rc");
             psi.ArgumentList.Add("--rc-addr");
             psi.ArgumentList.Add($"127.0.0.1:{rcPort}");
-            psi.ArgumentList.Add("--rc-no-auth");
+            RcAuth.AddServerArgs(psi.ArgumentList);
 
             if (!string.IsNullOrWhiteSpace(mount.ExtraFlags))
             {
@@ -240,7 +252,7 @@ namespace RcloneMount.Services
             }
         }
 
-        private static string[] SplitFlags(string input)
+        internal static string[] SplitFlags(string input)
         {
             var list = new List<string>();
             var buf = new System.Text.StringBuilder();

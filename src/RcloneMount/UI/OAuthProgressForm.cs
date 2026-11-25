@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +12,7 @@ namespace RcloneMount.UI
     {
         private readonly RcloneConfigService configService;
         private readonly string providerType;
+        private readonly IReadOnlyDictionary<string, string>? authConfig;
         private readonly CancellationTokenSource cts = new();
         private readonly Label lblStatus;
         private readonly TextBox txtLog;
@@ -19,10 +21,11 @@ namespace RcloneMount.UI
         public string? Token { get; private set; }
         public string? ErrorMessage { get; private set; }
 
-        public OAuthProgressForm(RcloneConfigService configService, string providerType)
+        public OAuthProgressForm(RcloneConfigService configService, string providerType, IReadOnlyDictionary<string, string>? authConfig = null)
         {
             this.configService = configService;
             this.providerType = providerType;
+            this.authConfig = authConfig;
 
             Icon = AppIcon.Get();
             Text = $"Authorizing {providerType}...";
@@ -63,6 +66,9 @@ namespace RcloneMount.UI
             Controls.Add(txtLog);
             Controls.Add(btnCancel);
 
+            DialogTheme.Apply(this);
+            RoundedButtons.Apply(this);
+
             Shown += async (_, _) => await RunAsync();
         }
 
@@ -76,7 +82,7 @@ namespace RcloneMount.UI
 
             try
             {
-                Token = await configService.AuthorizeAsync(providerType, progress, cts.Token);
+                Token = await configService.AuthorizeAsync(providerType, authConfig, progress, cts.Token);
                 DialogResult = DialogResult.OK;
             }
             catch (OperationCanceledException)

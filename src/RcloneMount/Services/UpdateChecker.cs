@@ -23,6 +23,13 @@ namespace RcloneMount.Services
             return c;
         }
 
+        // GitHub repo Velopack checks for app updates. Placeholder until the app has a
+        // public home; while it says "REPLACE-WITH" the app-update check stays silent.
+        // When the repo is created, swap the value; nothing else changes.
+        public const string AppRepoUrl = "https://github.com/REPLACE-WITH-OWNER/RcloneMount";
+
+        public static bool AppRepoConfigured => !AppRepoUrl.Contains("REPLACE-WITH", StringComparison.Ordinal);
+
         public static Task<LatestRelease?> LatestRcloneAsync() => LatestGithubReleaseAsync("rclone/rclone");
         public static Task<LatestRelease?> LatestWinFspAsync() => LatestGithubReleaseAsync("winfsp/winfsp");
 

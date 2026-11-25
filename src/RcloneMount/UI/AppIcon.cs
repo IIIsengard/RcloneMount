@@ -12,46 +12,93 @@ namespace RcloneMount.UI
         public static Icon Get()
         {
             if (cached is not null) return cached;
+            // Prefer the real app.ico embedded in the exe via <ApplicationIcon>.
+            try
+            {
+                var exe = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exe))
+                {
+                    var extracted = Icon.ExtractAssociatedIcon(exe);
+                    if (extracted is not null)
+                    {
+                        cached = extracted;
+                        return cached;
+                    }
+                }
+            }
+            catch { }
             cached = Build(32);
             return cached;
         }
 
+        // Runtime fallback for the rounded-square "rcM" tile. Kept visually in sync
+        // with scripts/generate-app-icon.ps1, which produces the on-disk app.ico —
+        // if you change the design, update both so the pre-launch (Explorer/taskbar)
+        // and post-launch (dynamically drawn) icons don't diverge.
         private static Icon Build(int size)
         {
             using var bmp = new Bitmap(size, size);
             using (var g = Graphics.FromImage(bmp))
             {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.SmoothingMode     = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode   = PixelOffsetMode.HighQuality;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                 g.Clear(Color.Transparent);
 
-                var top = Color.FromArgb(255, 90, 155, 235);
-                var bottom = Color.FromArgb(255, 45, 100, 180);
+                var radius = Math.Max(2, (int)Math.Round(size * 0.18));
+                var rect   = new RectangleF(0, 0, size, size);
+                using var path = Drawing.RoundedRect(rect, radius);
 
-                using var body = new LinearGradientBrush(new Rectangle(0, 0, size, size), top, bottom, 90f);
-                using var outline = new Pen(Color.FromArgb(255, 30, 70, 140), Math.Max(1, size / 16f));
+                using var body = new LinearGradientBrush(
+                    rect,
+                    Color.FromArgb(255,  74, 144, 226),
+                    Color.FromArgb(255,  30,  80, 165),
+                    90f);
+                g.FillPath(body, path);
 
-                // Cloud: three bumps + base rectangle
-                float unit = size / 32f;
-                var puffs = new[]
+                // Top highlight for depth at larger sizes; at 16-24 px it just adds
+                // noise so we skip it.
+                if (size >= 32)
                 {
-                    new RectangleF(3 * unit, 12 * unit, 13 * unit, 13 * unit),
-                    new RectangleF(9 * unit, 5 * unit, 15 * unit, 15 * unit),
-                    new RectangleF(18 * unit, 11 * unit, 12 * unit, 12 * unit),
-                };
-                var baseRect = new RectangleF(3 * unit, 19 * unit, 27 * unit, 8 * unit);
+                    var hiRect = new RectangleF(0, 0, size, size * 0.45f);
+                    using var hi = new LinearGradientBrush(
+                        hiRect,
+                        Color.FromArgb(70, 255, 255, 255),
+                        Color.FromArgb(0, 255, 255, 255),
+                        90f);
+                    g.SetClip(path);
+                    g.FillRectangle(hi, hiRect);
+                    g.ResetClip();
+                }
 
-                foreach (var p in puffs) g.FillEllipse(body, p);
-                g.FillRectangle(body, baseRect);
-                foreach (var p in puffs) g.DrawEllipse(outline, p);
+                using var outline = new Pen(Color.FromArgb(255, 20, 55, 120), Math.Max(1, size / 48f));
+                g.DrawPath(outline, path);
 
-                // Little drive-letter "M" inset
-                using var textFont = new Font(FontFamily.GenericSansSerif, unit * 7f, FontStyle.Bold, GraphicsUnit.Pixel);
-                var text = "R";
-                var sz = g.MeasureString(text, textFont);
+                // Two-row "rc/M" monogram at ≥24 px; below that the small font
+                // sizes turn to mush so we fall back to a single bold "M" that
+                // still reads at a taskbar glance.
                 using var textBrush = new SolidBrush(Color.White);
-                g.DrawString(text, textFont, textBrush,
-                    (size - sz.Width) / 2f,
-                    (size - sz.Height) / 2f + unit * 1f);
+                using var fmt = new StringFormat
+                {
+                    Alignment = StringAlignment.Center,
+                    LineAlignment = StringAlignment.Center,
+                    FormatFlags = StringFormatFlags.NoWrap,
+                };
+                if (size < 24)
+                {
+                    using var mFont = new Font("Segoe UI", Math.Max(4, size * 0.68f), FontStyle.Bold, GraphicsUnit.Pixel);
+                    g.DrawString("M", mFont, textBrush, new RectangleF(0, size * 0.03f, size, size), fmt);
+                }
+                else
+                {
+                    // The M is larger than "rc" because a single glyph on the
+                    // bottom row needs to visually match a two-letter row above.
+                    using var rcFont = new Font("Segoe UI", Math.Max(6, size * 0.30f), FontStyle.Bold, GraphicsUnit.Pixel);
+                    using var mFont  = new Font("Segoe UI", Math.Max(8, size * 0.58f), FontStyle.Bold, GraphicsUnit.Pixel);
+                    g.DrawString("rc", rcFont, textBrush, new RectangleF(0, size * 0.06f, size, size * 0.38f), fmt);
+                    g.DrawString("M",  mFont,  textBrush, new RectangleF(0, size * 0.36f, size, size * 0.62f), fmt);
+                }
             }
 
             var hIcon = bmp.GetHicon();

@@ -2,6 +2,7 @@
 bin/
 obj/
 publish/
+dist/
 
 # Rider / VS user-local files
 .vs/
@@ -25,3 +26,6 @@ Desktop.ini
 
 # Claude Code local config (permissions carry paths from other projects)
 .claude/
+
+# graphify knowledge graph (generated)
+graphify-out/

@@ -53,22 +53,13 @@ namespace RcloneMount.Services
         public Task DeleteRemoteAsync(string name) => RunExpectSuccessAsync("config", "delete", name);
 
         // rclone has no `config rename` subcommand — rename by editing the section header
-        // in rclone.conf directly. `rclone config file` prints the path on its last line.
+        // in rclone.conf directly.
         public async Task RenameRemoteAsync(string oldName, string newName)
         {
             if (string.Equals(oldName, newName, StringComparison.Ordinal))
                 return;
 
-            var (stdout, stderr, exit) = await RunAsync("config", "file").ConfigureAwait(false);
-            if (exit != 0)
-                throw new InvalidOperationException($"rclone config file failed: {stderr}");
-
-            var configPath = stdout
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Select(l => l.Trim())
-                .LastOrDefault(l => l.Length > 0)
-                ?? throw new InvalidOperationException("rclone config file returned no path.");
-
+            var configPath = SettingsService.ResolveRcloneConfigPath();
             if (!File.Exists(configPath))
                 throw new FileNotFoundException("rclone.conf not found.", configPath);
 
@@ -90,26 +81,25 @@ namespace RcloneMount.Services
             if (!replaced)
                 throw new InvalidOperationException($"Section [{oldName}] not found in rclone.conf.");
 
-            await File.WriteAllLinesAsync(configPath, lines).ConfigureAwait(false);
+            SettingsService.WriteAtomic(configPath, string.Join("\r\n", lines) + "\r\n");
         }
 
-        public void LaunchInteractiveConfig()
+        // Console where any rclone command works (config, ncdu, …) against the same rclone.exe
+        // and rclone.conf the app uses. UseShellExecute=false so the Environment edits apply.
+        public void LaunchTerminal(string? args = null)
         {
-            var psi = new ProcessStartInfo("cmd.exe", $"/k \"\"{exePath}\" config\"")
+            var command = string.IsNullOrWhiteSpace(args)
+                ? "rclone version & echo. & echo Type any rclone command; 'rclone help' lists them."
+                : "rclone " + args;
+            var psi = new ProcessStartInfo("cmd.exe", "/k " + command)
             {
-                UseShellExecute = true,
-                CreateNoWindow = false
+                UseShellExecute = false,
+                CreateNoWindow = false,
+                // Autostart launches us with cwd System32; start somewhere writable instead.
+                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             };
-            Process.Start(psi);
-        }
-
-        public void LaunchInteractiveReconnect(string remoteName)
-        {
-            var psi = new ProcessStartInfo("cmd.exe", $"/k \"\"{exePath}\" config reconnect {remoteName}:\"")
-            {
-                UseShellExecute = true,
-                CreateNoWindow = false
-            };
+            psi.Environment["PATH"] = Path.GetDirectoryName(exePath) + ";" + psi.Environment["PATH"];
+            psi.Environment["RCLONE_CONFIG"] = SettingsService.ResolveRcloneConfigPath();
             Process.Start(psi);
         }
 
@@ -152,10 +142,17 @@ namespace RcloneMount.Services
             await RunExpectSuccessAsync(args.ToArray()).ConfigureAwait(false);
         }
 
-        // Runs `rclone authorize <type>`, streams stderr (rclone prints the auth URL there),
-        // captures stdout (rclone prints the resulting token JSON there when done). Progress
-        // messages (like "Please go to this URL...") go to onProgress.
-        public async Task<string> AuthorizeAsync(string type, IProgress<string>? onProgress, CancellationToken cancellationToken)
+        // Runs `rclone authorize <type> [config-blob]`, streams stderr (rclone prints
+        // the auth URL there), captures stdout (rclone prints the resulting token JSON
+        // there when done). Progress messages (like "Please go to this URL...") go to
+        // onProgress.
+        //
+        // authConfig, when supplied, becomes the base64-encoded JSON blob rclone accepts
+        // as authorize's second argument — this is how OAuth-shaping options like
+        // drive_scope, onedrive region, or custom client_id/client_secret are honoured
+        // by the token that comes back. Auth-managed fields (`token` etc.) are stripped
+        // before encoding so we don't feed an expired token into its own reissue.
+        public async Task<string> AuthorizeAsync(string type, IReadOnlyDictionary<string, string>? authConfig, IProgress<string>? onProgress, CancellationToken cancellationToken)
         {
             var psi = new ProcessStartInfo
             {
@@ -167,6 +164,10 @@ namespace RcloneMount.Services
             };
             psi.ArgumentList.Add("authorize");
             psi.ArgumentList.Add(type);
+
+            var encoded = EncodeAuthConfig(authConfig);
+            if (encoded is not null)
+                psi.ArgumentList.Add(encoded);
 
             using var proc = Process.Start(psi) ?? throw new IOException("Failed to start rclone authorize.");
             using var _ = cancellationToken.Register(() => { try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { } });
@@ -190,16 +191,209 @@ namespace RcloneMount.Services
             // e.g.  --------------------\n{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}\n--------------------
             var match = Regex.Match(stdout, @"\{[^{}]*""access_token""[^{}]*\}", RegexOptions.Singleline);
             if (!match.Success)
-                throw new InvalidOperationException("Could not parse token from rclone authorize output: " + stdout);
+                throw new InvalidOperationException("Could not parse token from rclone authorize output."); // stdout may hold the token
             return match.Value;
+        }
+
+        // Fields the OAuth flow issues, not consumes — never round-trip these into
+        // authorize's config blob or we'd tell rclone to use an expired token to mint
+        // a fresh one.
+        private static readonly HashSet<string> AuthManagedKeys = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "token", "refresh_token", "expiry", "access_token", "token_type"
+        };
+
+        private static string? EncodeAuthConfig(IReadOnlyDictionary<string, string>? values)
+        {
+            if (values is null) return null;
+            var filtered = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kv in values)
+            {
+                if (AuthManagedKeys.Contains(kv.Key)) continue;
+                if (string.IsNullOrEmpty(kv.Value)) continue;
+                filtered[kv.Key] = kv.Value;
+            }
+            if (filtered.Count == 0) return null;
+            var json = JsonSerializer.Serialize(filtered);
+            return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        }
+
+        // Removes `keysToRemove` from the [name] section of rclone.conf, leaving other
+        // keys and other sections alone. Used by the edit flow to strip options that
+        // stopped applying after a sub-provider switch — `rclone config update` can only
+        // add or change keys, never delete them, so we edit the file directly (same
+        // pattern as RenameRemoteAsync). No-op when the section is missing or the set
+        // is empty.
+        public async Task PruneRemoteAsync(string name, IReadOnlySet<string> keysToRemove)
+        {
+            if (keysToRemove is null || keysToRemove.Count == 0) return;
+
+            var configPath = SettingsService.ResolveRcloneConfigPath();
+            if (!File.Exists(configPath))
+                return;
+
+            var lines = await File.ReadAllLinesAsync(configPath).ConfigureAwait(false);
+            var header = "[" + name + "]";
+            var output = new List<string>(lines.Length);
+            var inSection = false;
+            var changed = false;
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var trimmed = lines[i].TrimEnd();
+                if (trimmed.StartsWith("[", StringComparison.Ordinal) && trimmed.EndsWith("]", StringComparison.Ordinal))
+                {
+                    inSection = string.Equals(trimmed, header, StringComparison.Ordinal);
+                    output.Add(lines[i]);
+                    continue;
+                }
+
+                if (inSection)
+                {
+                    var eq = lines[i].IndexOf('=');
+                    if (eq > 0)
+                    {
+                        var key = lines[i].Substring(0, eq).Trim();
+                        if (keysToRemove.Contains(key))
+                        {
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+                output.Add(lines[i]);
+            }
+
+            if (changed)
+                SettingsService.WriteAtomic(configPath, string.Join("\r\n", output) + "\r\n");
+        }
+
+        // Result of TestConnectionAsync — a boolean gate plus enough detail to render
+        // a "✓ Connected in 425 ms · Free 12.3 GB / Total 100 GB" line without the UI
+        // having to parse rclone output itself. UsedBytes / TotalBytes are null when
+        // the backend doesn't implement `about` and we fell back to `lsd`.
+        public sealed record TestConnectionResult(
+            bool Success,
+            TimeSpan Elapsed,
+            string Method,
+            long? FreeBytes,
+            long? UsedBytes,
+            long? TotalBytes,
+            string? ErrorMessage);
+
+        // Probes a remote by asking rclone for its quota (`about`), falling back to
+        // a shallow listing (`lsd --max-depth 1`) when the backend doesn't support
+        // about. Both are cheap round-trips that surface auth/network/config errors
+        // without pulling any file bytes. Cancels + kills the child on timeout so a
+        // hung remote can't stall the UI thread.
+        public async Task<TestConnectionResult> TestConnectionAsync(string remoteName, TimeSpan timeout, CancellationToken ct = default)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var (stdout, stderr, exit) = await RunCancellableAsync(cts.Token, "about", $"{remoteName}:", "--json").ConfigureAwait(false);
+            sw.Stop();
+
+            if (exit == 0 && !string.IsNullOrWhiteSpace(stdout))
+            {
+                long? free = null, used = null, total = null;
+                try
+                {
+                    using var doc = JsonDocument.Parse(stdout);
+                    if (doc.RootElement.TryGetProperty("free", out var f) && f.ValueKind == JsonValueKind.Number) free = f.GetInt64();
+                    if (doc.RootElement.TryGetProperty("used", out var u) && u.ValueKind == JsonValueKind.Number) used = u.GetInt64();
+                    if (doc.RootElement.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number) total = t.GetInt64();
+                }
+                catch { /* rclone gave us non-JSON — still a success, just no quota */ }
+                return new TestConnectionResult(true, sw.Elapsed, "about", free, used, total, null);
+            }
+
+            // Fall back to `lsd` when about is unimplemented for this backend, or when
+            // it returned exit=1 but with a stderr that suggests config/auth is fine.
+            // Cheaper than trying to sniff the reason from stderr.
+            if (cts.IsCancellationRequested)
+                return new TestConnectionResult(false, sw.Elapsed, "about", null, null, null, "Timed out after " + FormatTimeout(timeout));
+
+            using var cts2 = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts2.CancelAfter(timeout);
+            var sw2 = System.Diagnostics.Stopwatch.StartNew();
+            var (_, stderr2, exit2) = await RunCancellableAsync(cts2.Token, "lsd", $"{remoteName}:", "--max-depth", "1").ConfigureAwait(false);
+            sw2.Stop();
+
+            if (exit2 == 0)
+                return new TestConnectionResult(true, sw2.Elapsed, "lsd", null, null, null, null);
+
+            if (cts2.IsCancellationRequested)
+                return new TestConnectionResult(false, sw2.Elapsed, "lsd", null, null, null, "Timed out after " + FormatTimeout(timeout));
+
+            // Neither worked — surface the more informative of the two stderrs.
+            // Prefer lsd's stderr; about's failure is more often "not supported" noise.
+            var msg = FirstMeaningfulLine(stderr2)
+                   ?? FirstMeaningfulLine(stderr)
+                   ?? $"rclone exited {exit2}";
+            return new TestConnectionResult(false, sw2.Elapsed, "lsd", null, null, null, msg);
+        }
+
+        private static string FormatTimeout(TimeSpan t) =>
+            t.TotalSeconds >= 1 ? $"{t.TotalSeconds:0}s" : $"{t.TotalMilliseconds:0}ms";
+
+        private static string? FirstMeaningfulLine(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            foreach (var raw in s.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0) continue;
+                // rclone prefixes info/debug lines with a timestamp+level tag; strip it
+                // so the message is what the user actually sees.
+                var colon = line.IndexOf(':');
+                if (colon > 0 && line.Length > colon + 2)
+                {
+                    var tail = line.Substring(colon + 1).TrimStart();
+                    if (tail.Length > 0) return tail;
+                }
+                return line;
+            }
+            return null;
+        }
+
+        private async Task<(string Stdout, string Stderr, int ExitCode)> RunCancellableAsync(CancellationToken ct, params string[] args)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+
+            using var proc = Process.Start(psi) ?? throw new IOException("Failed to start rclone.");
+            using var reg = ct.Register(() => { try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { } });
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            try { await proc.WaitForExitAsync(ct).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                // Cancellation-token registration already killed the process — swallow
+                // and fall through so we return whatever we captured before the kill.
+            }
+            return (await stdoutTask.ConfigureAwait(false), await stderrTask.ConfigureAwait(false), proc.HasExited ? proc.ExitCode : -1);
         }
 
         private async Task RunExpectSuccessAsync(params string[] args)
         {
             var (_, stderr, exit) = await RunAsync(args).ConfigureAwait(false);
             if (exit != 0)
-                throw new InvalidOperationException($"rclone {string.Join(' ', args)} failed: {stderr}");
+                throw new InvalidOperationException(DescribeFailure(args, stderr));
         }
+
+        // Only the verb goes in the message: the remaining args carry key=value pairs such as
+        // pass=… or token=…, and this message is shown, logged to activity.log and bundled.
+        internal static string DescribeFailure(string[] args, string stderr) =>
+            $"rclone {string.Join(' ', args.Take(2))} failed: {stderr}";
 
         private async Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(params string[] args)
         {

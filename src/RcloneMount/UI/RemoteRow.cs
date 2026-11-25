@@ -68,7 +68,7 @@ namespace RcloneMount.UI
             const int padX = 10;
             const int badgeSize = 32;
             var badge = new Rectangle(padX + 2, (Height - badgeSize) / 2, badgeSize, badgeSize);
-            ProviderVisuals.DrawBadge(g, badge, Remote?.Type ?? "");
+            ProviderVisuals.DrawBadge(g, badge, Remote);
 
             // Labels
             var textX = badge.Right + 10;
@@ -106,7 +106,7 @@ namespace RcloneMount.UI
 
         private string FormatSubtitle()
         {
-            var type = Remote?.Type ?? "";
+            var type = ProviderVisuals.FriendlyType(Remote?.Type);
             if (MountsCount == 0) return $"{type} · no mounts";
             if (MountsCount == 1) return $"{type} · 1 mount";
             return $"{type} · {MountsCount} mounts";

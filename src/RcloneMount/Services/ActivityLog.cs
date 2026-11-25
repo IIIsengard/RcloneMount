@@ -20,7 +20,7 @@ namespace RcloneMount.Services
             Message = message;
         }
         public override string ToString() =>
-            $"{Timestamp:HH:mm:ss}  {LevelTag(Level)}  {Message}";
+            $"{Timestamp:yyyy-MM-dd HH:mm:ss}  {LevelTag(Level)}  {Message}";
 
         // Persisted form uses ISO date + level + single-line message.
         public string ToPersistLine() =>
