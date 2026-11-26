@@ -50,6 +50,50 @@ public class ScheduledSpecTests
         Assert.True(remote.ServerSideAcrossConfigs);
     }
 
+    // Scheduled and resumed runs pass the saved name on; rclone must refuse it, not use another place.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MissingRemote_FailsTheRun(bool missingSource)
+    {
+        if (RealRclone.Exe is not { } exe) return;
+        var local = Directory.CreateTempSubdirectory("rm-src-").FullName;
+        File.WriteAllText(Path.Combine(local, "a.txt"), "a");
+        var gone = "rm-gone-" + Guid.NewGuid().ToString("N");
+        var job = new TransferJob
+        {
+            Operation = "Copy",
+            SourceRemote = missingSource ? gone : "", SourcePath = missingSource ? "x" : local,
+            DestRemote = missingSource ? "" : gone, DestPath = missingSource ? Path.Combine(local, "out") : "x",
+            ExtraFlags = $"--config \"{Path.Combine(local, "empty.conf")}\"", // never the user's rclone config
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var result = await new RcloneJobService(exe).RunAsync(MainForm.BuildSpecFromSaved(job), new Progress<JobProgress>(), timeout.Token, "missing-remote");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("didn't find section in config file", result.StderrTail);
+        Assert.False(Directory.Exists(Path.Combine(local, "out")));
+    }
+
+    // On Windows rclone reads "q:" as drive Q:, even when a remote "q" exists.
+    [Theory]
+    [InlineData("q", "")]
+    [InlineData("", "Q")]
+    public async Task OneLetterRemote_IsRefused_NotReadAsADrive(string source, string dest)
+    {
+        var service = new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe"));
+        var spec = MainForm.BuildSpecFromSaved(new TransferJob
+        {
+            Operation = "Copy", SourceRemote = source, SourcePath = "s", DestRemote = dest, DestPath = "d",
+        });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.RunAsync(spec, new Progress<JobProgress>(), CancellationToken.None));
+
+        Assert.Contains("drive", error.Message);
+    }
+
     [Fact]
     public void ExtraFlags_AppendedAfterFilterArgs()
     {

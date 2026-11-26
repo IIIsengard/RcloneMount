@@ -37,6 +37,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **"Last run" only counts runs of the job as saved.** Starting a saved job after changing
   its settings without saving, or after its remote was removed, no longer marks that job as
   run. Runs are also no longer missed when many jobs finish at once or rclone fails to start.
+- **A removed remote is no longer replaced by another one.** The transfer window selected
+  local disk or the first remote instead. It now names the missing remote and waits for you
+  to pick one before you can start or save.
+- **Jobs on a remote with a one-letter name are refused.** Windows reads `q:` as drive Q:, so
+  such a job worked on the local drive instead of the remote. Rename the remote.
+- **Every failed job shows its notification**, also when many jobs finish at once.
+- **A saved job opens in one window only.** Opening it again brings that window forward.
 - **Saving a new job twice no longer creates a duplicate.**
 - **`&` shows in names and headings.** "US & Canada" and "Startup & Updates" lost the `&`.
 - **Local paths in job rows** no longer start with a stray `:`.

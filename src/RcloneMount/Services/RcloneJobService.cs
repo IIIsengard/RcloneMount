@@ -157,6 +157,12 @@ namespace RcloneMount.Services
         // still land in history, just without a job stamp.
         public async Task<JobResult> RunAsync(JobSpec spec, IProgress<JobProgress> progress, CancellationToken ct, string jobName = "")
         {
+            // rclone on Windows reads a one-letter name as a drive ("q:" is Q:), even when that remote exists.
+            foreach (var remote in new[] { spec.SourceRemote, spec.DestRemote })
+                if (remote.Length == 1 && char.IsAsciiLetter(remote[0]))
+                    throw new InvalidOperationException(
+                        $"Windows reads \"{remote}:\" as a drive letter. Rename the remote to two or more characters.");
+
             var rcPort = ReserveFreeLoopbackPort();
 
             // Check / cryptcheck: allocate a per-run report dir so we can point

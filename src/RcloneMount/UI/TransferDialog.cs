@@ -52,6 +52,10 @@ namespace RcloneMount.UI
         private readonly ToolTip scheduleTip = new();
         private readonly TextBox txtExtraFlags;
         private FilterRules filters = new();
+        // Names this dialog was opened with; shown when one of them is not in the remote list.
+        private readonly string seedSourceName;
+        private readonly string seedDestName;
+        private readonly Label lblMissingRemote;
         private readonly Button btnSave;
         private readonly Button btnStart;
         private readonly Button btnInitialise;
@@ -64,6 +68,7 @@ namespace RcloneMount.UI
         // saved job — used so Save updates the same record instead of creating a
         // duplicate, and so the enqueued run reports back with the right JobId.
         private string? editingJobId;
+        internal string? JobId => editingJobId;
         // InputSnapshot() as of the last load or Save; a run is credited to the job only while it still matches.
         private object? savedInputs;
 
@@ -115,16 +120,8 @@ namespace RcloneMount.UI
             cbSourceRemote.AddItem("(Local disk)");
             foreach (var r in remotes)
                 cbSourceRemote.AddItem($"{r.Name} ({ProviderVisuals.FriendlyType(r.Type)})");
-            var seedSourceName = existingJob?.SourceRemote ?? sourceRemote ?? "";
-            cbSourceRemote.SelectedIndex = LocalRemoteIndex;
-            if (!string.IsNullOrEmpty(seedSourceName))
-            {
-                for (var i = 0; i < remotes.Count; i++)
-                {
-                    if (string.Equals(remotes[i].Name, seedSourceName, StringComparison.Ordinal))
-                    { cbSourceRemote.SelectedIndex = i + 1; break; }
-                }
-            }
+            seedSourceName = existingJob?.SourceRemote ?? sourceRemote ?? "";
+            cbSourceRemote.SelectedIndex = IndexOfRemote(seedSourceName);
 
             var lblSourcePath = new Label { Text = "Source path:", Location = new Point(16, 91), AutoSize = true };
             txtSourcePath = new TextBox
@@ -171,20 +168,9 @@ namespace RcloneMount.UI
             cbDestRemote.AddItem("(Local disk)");
             foreach (var r in remotes)
                 cbDestRemote.AddItem($"{r.Name} ({ProviderVisuals.FriendlyType(r.Type)})");
-            cbDestRemote.SelectedIndex = remotes.Count > 0 ? 1 : LocalRemoteIndex;
-            if (existingJob is not null)
-            {
-                if (string.IsNullOrEmpty(existingJob.DestRemote))
-                    cbDestRemote.SelectedIndex = LocalRemoteIndex;
-                else
-                {
-                    for (var i = 0; i < remotes.Count; i++)
-                    {
-                        if (string.Equals(remotes[i].Name, existingJob.DestRemote, StringComparison.Ordinal))
-                        { cbDestRemote.SelectedIndex = i + 1; break; }
-                    }
-                }
-            }
+            seedDestName = existingJob?.DestRemote ?? "";
+            cbDestRemote.SelectedIndex = existingJob is not null ? IndexOfRemote(seedDestName)
+                : remotes.Count > 0 ? 1 : LocalRemoteIndex;
 
             var lblDestPath = new Label { Text = "Dest path:", Location = new Point(16, 201), AutoSize = true };
             txtDestPath = new TextBox { Location = new Point(140, 198), Width = 366, Text = existingJob?.DestPath ?? "" };
@@ -269,12 +255,14 @@ namespace RcloneMount.UI
                 PlaceholderText = "e.g. --fast-list --transfers 8",
             };
 
+            // Two lines per missing side; the ellipsis tooltip covers longer names.
+            lblMissingRemote = new Label { Location = new Point(16, 384), Size = new Size(524, 68), AutoEllipsis = true, UseMnemonic = false };
+
             btnSave = new Button
             {
                 Text = existingJob is null ? "Save" : "Update",
                 Location = new Point(16, 456),
                 Size = new Size(90, 30),
-                Enabled = saveCallback is not null,
                 Visible = saveCallback is not null,
             };
             btnSave.Click += (_, _) => SaveJob();
@@ -306,6 +294,7 @@ namespace RcloneMount.UI
                 btnFilters, lblFiltersSummary,
                 lblBwLabel, txtBwLimit, lblScheduleLabel, txtSchedule, lblScheduleError,
                 lblExtraFlags, txtExtraFlags,
+                lblMissingRemote,
                 btnSave, btnInitialise, btnStart, btnCancel,
             });
 
@@ -318,11 +307,35 @@ namespace RcloneMount.UI
             SyncOptionVisibility();
             ShowScheduleError();
 
-            // A saved remote that no longer exists leaves another one selected: that is not the saved job.
-            if (existingJob is not null
-                && ResolveRemoteName(cbSourceRemote) == existingJob.SourceRemote
-                && ResolveRemoteName(cbDestRemote) == existingJob.DestRemote)
-                savedInputs = InputSnapshot();
+            if (existingJob is not null) savedInputs = InputSnapshot();
+        }
+
+        // -1 (nothing selected) for a name that is not in the list: never substitute another remote.
+        private int IndexOfRemote(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return LocalRemoteIndex;
+            for (var i = 0; i < remotes.Count; i++)
+                if (string.Equals(remotes[i].Name, name, StringComparison.Ordinal)) return i + 1;
+            return -1;
+        }
+
+        // Says which remote is missing and blocks Start and Save until another one is picked.
+        private void ShowMissingRemotes()
+        {
+            var source = MissingRemoteNote(cbSourceRemote, "Source", seedSourceName);
+            var dest = MissingRemoteNote(cbDestRemote, "Destination", seedDestName);
+            lblMissingRemote.ForeColor = Theme.Critical;
+            lblMissingRemote.Text = (source + "\n" + dest).Trim();
+            var picked = source.Length == 0 && dest.Length == 0;
+            btnStart.Enabled = btnInitialise.Enabled = picked;
+            btnSave.Enabled = picked && saveCallback is not null;
+        }
+
+        private static string MissingRemoteNote(ThemedDropDown cb, string side, string name)
+        {
+            var note = cb.SelectedIndex >= 0 ? "" : $"{side} remote \"{name}\" is not in your rclone config. Pick another one.";
+            cb.AccessibleDescription = note;
+            return note;
         }
 
         // Every input that changes what rclone does. Name, schedule and the resync button do not.
@@ -366,6 +379,7 @@ namespace RcloneMount.UI
             lblMaxDelete.Visible = isBisync;
             txtMaxDelete.Visible = isBisync;
             btnInitialise.Visible = isBisync;
+            ShowMissingRemotes();
         }
 
         // Build the JobSpec from the current form state, hand it to the queue,

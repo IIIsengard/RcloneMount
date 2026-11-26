@@ -219,33 +219,104 @@ public class UiTextTests
         Assert.Equal(new[] { "a" }, started);
     });
 
-    // The dialog falls back to another remote when the saved one no longer exists.
+    // A remote that no longer exists must never be swapped for another one.
     [Theory]
-    [InlineData("gone", "r")]
-    [InlineData("r", "gone")]
-    public void TransferDialog_SavedRemoteMissing_IsNotCreditedUntilSaved(string source, string dest) => Sta(() =>
+    [InlineData("gone", "r", "cbSourceRemote", "cbDestRemote")]
+    [InlineData("r", "gone", "cbDestRemote", "cbSourceRemote")]
+    public void TransferDialog_SavedRemoteMissing_BlocksUntilOneIsPicked(string source, string dest, string missing, string other) => Sta(() =>
     {
         var started = new List<string>();
         var job = SavedJob();
         job.SourceRemote = source;
         job.DestRemote = dest;
         using var dialog = SavedJobDialog(job, started);
+        var drop = (ThemedDropDown)Of(dialog, missing);
+        bool[] Enabled() => new[] { "btnStart", "btnSave", "btnInitialise" }.Select(b => ((Button)Of(dialog, b)).Enabled).ToArray();
 
-        Invoke(dialog, "StartAndClose", false);
+        Assert.Equal(-1, drop.SelectedIndex);
+        Assert.Equal(1, ((ThemedDropDown)Of(dialog, other)).SelectedIndex);
+        Assert.Contains(All<Label>(dialog), l => l.Text.Contains("\"gone\""));
+        Assert.Contains("\"gone\"", drop.AccessibleDescription);
+        Assert.Equal(new[] { false, false, false }, Enabled());
+
+        drop.SelectedIndex = 1;
+
+        Assert.DoesNotContain(All<Label>(dialog), l => l.Text.Contains("\"gone\""));
+        Assert.Equal("", drop.AccessibleDescription);
+        Assert.Equal(new[] { true, true, true }, Enabled());
+        Invoke(dialog, "StartAndClose", false); // picked, not saved: still not the saved job
         Invoke(dialog, "SaveJob");
         Invoke(dialog, "StartAndClose", false);
-
         Assert.Equal(new[] { "", "a" }, started);
+    });
+
+    [Fact]
+    public void TransferDialog_SavedLocalDisk_IsSelected() => Sta(() =>
+    {
+        var job = SavedJob();
+        job.SourceRemote = job.DestRemote = "";
+        using var dialog = SavedJobDialog(job, new List<string>());
+
+        Assert.Equal(0, ((ThemedDropDown)Of(dialog, "cbSourceRemote")).SelectedIndex);
+        Assert.Equal(0, ((ThemedDropDown)Of(dialog, "cbDestRemote")).SelectedIndex);
+        Assert.True(((Button)Of(dialog, "btnStart")).Enabled);
+    });
+
+    // E.g. "Copy from" on a mount whose remote was removed.
+    [Fact]
+    public void TransferDialog_SeededRemoteMissing_SelectsNothing() => Sta(() =>
+    {
+        using var dialog = new TransferDialog(new[] { new RcloneRemote { Name = "r", Type = "mega" } }, null, "gone", "s", saveCallback: _ => { });
+
+        Assert.Equal(-1, ((ThemedDropDown)Of(dialog, "cbSourceRemote")).SelectedIndex);
+        Assert.False(((Button)Of(dialog, "btnStart")).Enabled);
+        Assert.False(((Button)Of(dialog, "btnSave")).Enabled);
+    });
+
+    // Two dialogs on one job would let the older one credit its run to settings saved by the newer one.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // opened as a new job, then saved
+    public void RunSavedJob_ReusesTheDialogAlreadyOpenForThatJob(bool openedAsNew) => Sta(() =>
+    {
+        var form = Shell();
+        var remotes = new[] { new RcloneRemote { Name = "r", Type = "mega" } };
+        Set(form, "remotes", remotes);
+        Set(form, "jobService", new RcloneJobService("unused.exe"));
+        var job = SavedJob();
+        var open = openedAsNew
+            ? new TransferDialog(remotes, null, "r", "s", saveCallback: saved => job = saved)
+            : new TransferDialog(remotes, null, "r", "s", saveCallback: _ => { }, existingJob: job);
+        try
+        {
+            open.Owner = form; // what Show(this) sets, without putting a window on screen
+            if (openedAsNew)
+            {
+                ((TextBox)Of(open, "txtName")).Text = "nightly";
+                Invoke(open, "SaveJob");
+            }
+
+            Call(form, "RunSavedJob", job);
+
+            Assert.Same(open, Assert.Single(form.OwnedForms));
+        }
+        finally
+        {
+            foreach (var d in form.OwnedForms) d.Dispose();
+            open.Dispose();
+        }
     });
 
     // A run can leave the queue (finished-row cap) before the UI thread gets to it.
     [Fact]
-    public void FinishedRunNoLongerInTheQueue_IsStillRecorded_Once() => Sta(() =>
+    public void FinishedRunNoLongerInTheQueue_IsStillRecordedAndNotified_Once() => Sta(() =>
     {
         var form = Shell();
         var job = SavedJob();
         ((List<TransferJob>)Get(form, "jobs")!).Add(job);
         Set(form, "lastRunRecorded", new HashSet<string>()); // field initializers did not run
+        var notified = new HashSet<string>();
+        Set(form, "failureNotified", notified); // notifications stay off in the shell: no balloon
         var done = DateTime.UtcNow;
         var run = new JobRun
         {
@@ -263,6 +334,7 @@ public class UiTextTests
             Application.DoEvents();
             Assert.Equal(done, job.LastRunUtc);
             Assert.Equal("Failed to start", job.LastResultKind);
+            Assert.Equal(new[] { run.Id }, notified);
 
             job.LastRunUtc = null;
             Call(form, "OnJobRunFinished", run);

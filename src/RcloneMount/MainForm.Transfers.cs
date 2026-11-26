@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using RcloneMount.Models;
@@ -303,6 +304,12 @@ namespace RcloneMount
         private void RunSavedJob(TransferJob job)
         {
             if (jobService is null) return;
+            // One dialog per job: an older one would credit its run to settings saved in a newer one.
+            if (OwnedForms.OfType<TransferDialog>().FirstOrDefault(d => d.JobId == job.Id) is { } open)
+            {
+                open.Activate();
+                return;
+            }
             var dlg = new TransferDialog(remotes, EnqueueJobRun, job.SourceRemote, job.SourcePath,
                 preselectedOp: ParseOp(job.Operation),
                 saveCallback: UpsertJob,
@@ -331,7 +338,6 @@ namespace RcloneMount
                 BeginInvoke(new Action(() =>
                 {
                     RefreshActiveList();
-                    NotifyNewFailures();
                     UpdatePowerGuard();
                 }));
             }
@@ -342,16 +348,13 @@ namespace RcloneMount
         // Notify so the Notifications toggle applies. Runs are marked seen even when the toggle
         // is off, so switching it on later does not replay old failures.
         private readonly HashSet<string> failureNotified = new(StringComparer.Ordinal);
-        private void NotifyNewFailures()
+        // Takes the run from RunFinished, like SaveLastRun.
+        private void NotifyFailure(Models.JobRun run)
         {
-            if (jobQueue is null) return;
-            foreach (var run in jobQueue.Snapshot())
-            {
-                if (run.State != Models.JobRunState.Failed || !failureNotified.Add(run.Id)) continue;
-                var why = run.LastError ?? run.Outcome ?? "unknown error";
-                if (why.Length > 150) why = why[..150] + "…";
-                Notify("Transfer job failed", $"{run.DisplayName}: {why}", ToolTipIcon.Error, 8000);
-            }
+            if (run.State != Models.JobRunState.Failed || !failureNotified.Add(run.Id)) return;
+            var why = run.LastError ?? run.Outcome ?? "unknown error";
+            if (why.Length > 150) why = why[..150] + "…";
+            Notify("Transfer job failed", $"{run.DisplayName}: {why}", ToolTipIcon.Error, 8000);
         }
 
         private readonly HashSet<string> lastRunRecorded = new(StringComparer.Ordinal);
@@ -363,9 +366,9 @@ namespace RcloneMount
             RefreshJobsList();
         }
 
-        // After a job ends, record it on its saved job, and make any mount of the remote it wrote to
-        // re-list that folder (vfs/refresh), so new files show up without waiting for the long
-        // dir-cache to expire.
+        // After a job ends: record it on its saved job, report a failure, and make any mount of the
+        // remote it wrote to re-list that folder (vfs/refresh), so new files show up without waiting
+        // for the long dir-cache to expire.
         // Runs on the UI thread because `mounts` is only touched there.
         private void OnJobRunFinished(JobRun run)
         {
@@ -375,6 +378,7 @@ namespace RcloneMount
                 BeginInvoke(new Action(() =>
                 {
                     SaveLastRun(run);
+                    NotifyFailure(run);
                     _ = RefreshMountsAfterJobAsync(run);
                 }));
             }
