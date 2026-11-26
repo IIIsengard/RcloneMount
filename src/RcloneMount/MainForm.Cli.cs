@@ -164,9 +164,10 @@ namespace RcloneMount
 
             KeepUnmounted(found);
 
+            (string Letter, bool StillMounted) stopped;
             try
             {
-                await StopMountAsync(found);
+                stopped = await StopMountAsync(found);
             }
             catch (Exception ex)
             {
@@ -176,8 +177,12 @@ namespace RcloneMount
             try { RefreshMountList(); }
             catch { }
 
-            return new CliRelay.Response(0, $"Unmounted '{found.RemoteName}'.");
+            return UnmountReply(found.RemoteName, stopped.Letter, stopped.StillMounted);
         }
+
+        internal static CliRelay.Response UnmountReply(string name, string live, bool stillMounted) => stillMounted
+            ? new CliRelay.Response(5, $"{live} is still mounted by another rclone process (not started by this app).")
+            : new CliRelay.Response(0, $"Unmounted '{name}'.");
 
         private Mount? FindMountByName(string name)
         {

@@ -32,6 +32,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- `--unmount` now reports a failure when another rclone process still holds the
+  drive, instead of saying it was unmounted.
+- The message after renaming a remote counts only the drives that came back.
 - **Changes made in quick succession are saved correctly.** When two saves overlapped, the
   settings file could get half-finished changes or the save could fail, and a mount running
   on a temporary drive letter could show the wrong letter.

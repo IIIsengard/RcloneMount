@@ -407,9 +407,8 @@ namespace RcloneMount
                     editor.ResultValues, editor.KeysToPrune);
 
                 SetStatus(renamed
-                    ? (mountsToRemount.Count > 0
-                        ? $"Renamed to {newName}, {mountsToRemount.Count} mount(s) remounted."
-                        : $"Renamed to {newName} and updated.")
+                    ? RenameStatus(newName, mountsToRemount.Count,
+                        mountsToRemount.Count(m => mountService?.IsMounted(m) == true))
                     : $"Updated remote {newName}.");
                 if (pruneNote is not null)
                     activityLog.Warn(pruneNote);
@@ -420,6 +419,11 @@ namespace RcloneMount
                 SetStatusError("Update failed.", ex);
             }
         }
+
+        internal static string RenameStatus(string newName, int unmounted, int back) =>
+            unmounted == 0 ? $"Renamed to {newName} and updated."
+            : back == unmounted ? $"Renamed to {newName}, {back} mount(s) remounted."
+            : $"Renamed to {newName}, {back} of {unmounted} mount(s) remounted. See the activity log.";
 
         // Saves an edit, renaming first when the name changed, with the running mounts down around a
         // rename. Whatever fails, they come back up, under the name rclone.conf then holds.
