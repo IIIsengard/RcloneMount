@@ -60,6 +60,8 @@ namespace RcloneMount.Services
         public long TotalBytes { get; init; }
         public long UsedBytes { get; init; }
         public long FreeBytes { get; init; }
+        // VFS write-backs not yet on the remote (uploading + queued), from `vfs/stats`.
+        public int UploadsPending { get; init; }
     }
 
     // One in-flight transfer from a mount's rclone RC /core/stats.transferring[] array.
@@ -103,6 +105,11 @@ namespace RcloneMount.Services
         private readonly Dictionary<string, DateTime> lastCompletedSeenUtc = new();
 
         private sealed record AboutInfo(long Total, long Used, long Free);
+
+        // Last vfs/stats count per mount. A failed call keeps it (no label flicker, no dip in
+        // the busy total) but only for PendingKeepFor: a hung rclone must not hold the PC awake.
+        private readonly Dictionary<string, (int count, DateTime at)> lastPending = new();
+        private static readonly TimeSpan PendingKeepFor = TimeSpan.FromSeconds(30);
 
         public RcloneStatsPoller(RcloneMountService mountService, Func<IReadOnlyList<Mount>> mountSource)
         {
@@ -186,6 +193,9 @@ namespace RcloneMount.Services
                         lastCompletedSeenUtc[r.MountId] = newHighWater;
                 }
 
+                if (r.UploadsPending is int fresh) lastPending[r.MountId] = (fresh, now);
+                var pending = lastPending.TryGetValue(r.MountId, out var lp) && now - lp.at < PendingKeepFor ? lp.count : 0;
+
                 var driveOk = mountsById.TryGetValue(r.MountId, out var m)
                               && DriveLetterReachable(m.DriveLetter);
 
@@ -216,12 +226,13 @@ namespace RcloneMount.Services
                     TotalBytes = about?.Total ?? 0,
                     UsedBytes = about?.Used ?? 0,
                     FreeBytes = about?.Free ?? 0,
+                    UploadsPending = pending,
                 };
             }
 
             // Drop samples for mounts that have disappeared so the dict doesn't grow unbounded.
             var stale = lastSamples.Keys.Where(k => !seenKeys.Contains(k)).ToList();
-            foreach (var k in stale) { lastSamples.Remove(k); lastAbout.Remove(k); lastCompletedSeenUtc.Remove(k); }
+            foreach (var k in stale) { lastSamples.Remove(k); lastAbout.Remove(k); lastCompletedSeenUtc.Remove(k); lastPending.Remove(k); }
 
             return new AggregateStats
             {
@@ -264,6 +275,7 @@ namespace RcloneMount.Services
             // against the per-mount high-water mark — that happens in PollAsync so
             // the sampler stays stateless.
             public IReadOnlyList<TransferHistoryEntry> Completed { get; init; }
+            public int? UploadsPending { get; init; } // null: vfs/stats failed this tick
         }
 
         // Splits a rclone `transferring[]` item into up/down using the `group` tag if
@@ -319,7 +331,8 @@ namespace RcloneMount.Services
                     }
                 }
                 var completed = await FetchTransferredAsync(mount, port, ct).ConfigureAwait(false);
-                return new PerMountSample { MountId = mount.Id, Speed = speed, Bytes = bytes, Errors = errors, RcResponded = true, Transferring = transfers, DownSpeed = downSpeed, UpSpeed = upSpeed, Completed = completed };
+                var pending = await FetchUploadsPendingAsync(port, ct).ConfigureAwait(false);
+                return new PerMountSample { MountId = mount.Id, Speed = speed, Bytes = bytes, Errors = errors, RcResponded = true, Transferring = transfers, DownSpeed = downSpeed, UpSpeed = upSpeed, Completed = completed, UploadsPending = pending };
             }
             catch
             {
@@ -378,6 +391,35 @@ namespace RcloneMount.Services
             {
                 return Array.Empty<TransferHistoryEntry>();
             }
+        }
+
+        // Uploads this mount's rclone has not finished, or null when its RC did not answer
+        // (the caller cannot tell). Every unmount path checks this first (MainForm.UploadsGuardAsync).
+        internal static async Task<int?> FetchUploadsPendingAsync(int port, CancellationToken ct = default)
+        {
+            try
+            {
+                using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                using var resp = await Http.PostAsync($"http://127.0.0.1:{port}/vfs/stats", content, ct).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) return null;
+                return ParseUploadsPending(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // uploadsInProgress + uploadsQueued. rclone leaves out `diskCache` when
+        // --vfs-cache-mode is off: writes then go straight to the remote, so nothing is pending.
+        internal static int ParseUploadsPending(string json)
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("diskCache", out var dc) || dc.ValueKind != JsonValueKind.Object)
+                return 0;
+            int Read(string key) =>
+                dc.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+            return Read("uploadsInProgress") + Read("uploadsQueued");
         }
 
         private static DateTime? ReadTimestamp(JsonElement obj, string prop)

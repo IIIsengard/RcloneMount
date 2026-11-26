@@ -61,6 +61,7 @@ namespace RcloneMount
             if (ConfirmDialog.Show(this, "Remove mount",
                     $"Remove mount for {selected.RemoteName} at {selected.DriveLetter}?") != DialogResult.Yes)
                 return;
+            if (!await UploadsGuardAsync(new[] { selected }, "Remove", interactive: true, resumes: false)) return;
 
             CancelRetry(selected.Id);
 
@@ -165,9 +166,42 @@ namespace RcloneMount
             return false;
         }
 
+        // Every unmount path calls this first so a mount upload is never cut off without a
+        // word. Interactive: Wait / <action> anyway / Cancel, also when rclone does not answer.
+        // Automatic: refuse while uploads are pending; an RC that does not answer does not block.
+        // resumes: false for Remove / Rename / Delete, whose queued files never upload afterwards.
+        private async Task<bool> UploadsGuardAsync(IEnumerable<Mount> targets, string action, bool interactive, bool resumes = true)
+        {
+            var list = targets.ToList();
+            var pending = await CountPendingUploadsAsync(list);
+            var step = UploadsGuard.Decide(pending, interactive);
+            if (step != UploadsGuardStep.Ask) return step == UploadsGuardStep.Proceed;
+
+            using var dlg = new PendingUploadsDialog(action, pending, resumes, () => CountPendingUploadsAsync(list));
+            // Asked from the tray with the window hidden: no parent to centre on or to sit above.
+            if (!Visible) { dlg.StartPosition = FormStartPosition.CenterScreen; dlg.TopMost = true; }
+            DialogResult result;
+            uploadsDialog = dlg;
+            try { result = dlg.ShowDialog(this); }
+            finally { uploadsDialog = null; }
+            if (result == DialogResult.Yes)
+                activityLog.Warn($"{action} went ahead with {pending?.ToString() ?? "an unknown number of"} mount upload(s) pending; " +
+                    (resumes ? "rclone resumes them on the next mount." : "they stay only in rclone's local cache and will not be uploaded."));
+            return result is DialogResult.OK or DialogResult.Yes;
+        }
+
+        // null when a running target's rclone did not answer: unknown, not 0.
+        private async Task<int?> CountPendingUploadsAsync(IReadOnlyList<Mount> targets)
+        {
+            if (mountService is null) return 0;
+            var ports = targets.Select(m => mountService.GetRcPort(m)).OfType<int>().ToList();
+            return UploadsGuard.Sum(await Task.WhenAll(ports.Select(p => RcloneStatsPoller.FetchUploadsPendingAsync(p))));
+        }
+
         private async Task UnmountAsync(Mount selected)
         {
             if (mountService is null) return;
+            if (!await UploadsGuardAsync(new[] { selected }, "Unmount", interactive: true)) return;
 
             CancelRetry(selected.Id);
 

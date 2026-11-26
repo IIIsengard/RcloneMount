@@ -67,6 +67,13 @@ namespace RcloneMount
         private readonly HashSet<string> detachedMountIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, int> unhealthyPollHits = new(StringComparer.Ordinal);
         private const int DetachHitThreshold = 3;
+        // Detached mounts whose auto-recover kill waits for their pending uploads. One entry per
+        // episode (until the mount is healthy again or killed), so it logs and notifies once.
+        private readonly Dictionary<string, RecoverDeferral> recoverDeferred = new(StringComparer.Ordinal);
+        private record struct RecoverDeferral(DateTime SinceUtc, bool Requeued, bool Notified);
+        private static readonly TimeSpan RecoverDeferralNotifyAfter = TimeSpan.FromMinutes(10);
+        // The open "Uploads still pending" prompt, so a second Exit can bring it to the front.
+        private PendingUploadsDialog? uploadsDialog;
 
         // When the user's configured drive letter is already taken at mount time we
         // auto-fall-back to the next free letter and mutate mount.DriveLetter for the
@@ -571,13 +578,48 @@ namespace RcloneMount
             // exits before mounts unmount. Cancel, finish the teardown, then close for real.
             // Windows shutdown keeps the old best-effort path so we don't block log-off.
             if (shutdownComplete) return;
+            // Busy with the window open: refuse the shutdown query so Windows lists RcloneMount with
+            // its reason; the user can still pick "Shut down anyway" (WndProc's WM_ENDSESSION).
+            // Hidden in the tray, or idle, keeps the best-effort path below.
+            var busy = CurrentBusyReason();
+            if (e.CloseReason == CloseReason.WindowsShutDown && PowerGuard.HoldShutdown(Visible, busy))
+            {
+                e.Cancel = true;
+                PowerGuard.Apply(Handle, busy);
+                activityLog.Warn($"Windows shutdown held: {busy}");
+                _ = Services.TransferTotalsService.SaveAsync(lifetimeTotals); // in case Windows ends us without WM_ENDSESSION
+                return;
+            }
             if (e.CloseReason != CloseReason.WindowsShutDown)
             {
                 e.Cancel = true;
-                if (shutdownStarted) return;
+                if (shutdownStarted) { uploadsDialog?.Activate(); return; }
+                shutdownStarted = true; // a second Exit while the prompt is open must not start teardown
+                if (!await UploadsGuardAsync(mounts, "Exit", interactive: true))
+                {
+                    shutdownStarted = false;
+                    exitFromTray = false;
+                    return;
+                }
             }
             shutdownStarted = true;
 
+            StopBackgroundWork();
+            if (mountService is not null)
+                await mountService.UnmountAllAsync();
+            try { await Services.TransferTotalsService.SaveAsync(lifetimeTotals); } catch { }
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            // Running transfer jobs are not cancelled: their processes die with ours (job
+            // object), their InFlight flag stays set, and next launch offers to resume them.
+            PowerGuard.Apply(Handle, null);
+            shutdownComplete = true;
+            if (e.Cancel) BeginInvoke(new Action(Close));
+        }
+
+        // Safe to run twice: the WM_ENDSESSION path may follow a teardown already in progress.
+        private void StopBackgroundWork()
+        {
             CancelAllRetries();
             UnhookSystemThemeChanges();
             UnhookAutoRecoverSignals();
@@ -588,15 +630,27 @@ namespace RcloneMount
             if (statsTimer is not null) { statsTimer.Stop(); statsTimer.Dispose(); statsTimer = null; }
             if (refreshDebounce is not null) { refreshDebounce.Stop(); refreshDebounce.Dispose(); refreshDebounce = null; }
             StopScheduler();
-            if (mountService is not null)
-                await mountService.UnmountAllAsync();
-            try { await Services.TransferTotalsService.SaveAsync(lifetimeTotals); } catch { }
-            trayIcon.Visible = false;
-            trayIcon.Dispose();
-            // Running transfer jobs are not cancelled: their processes die with ours (job
-            // object), their InFlight flag stays set, and next launch offers to resume them.
-            shutdownComplete = true;
-            if (e.Cancel) BeginInvoke(new Action(Close));
+        }
+
+        private const int WM_ENDSESSION = 0x0016;
+
+        // WinForms raises no FormClosing for WM_ENDSESSION, so "Shut down anyway" after a held
+        // shutdown would skip the unmount and the totals save. Windows ends the process a few
+        // seconds after this returns, so the same best-effort teardown runs here, time-bounded.
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_ENDSESSION && m.WParam != IntPtr.Zero && !shutdownComplete)
+            {
+                StopBackgroundWork();
+                // Task.Run: no continuation needs this (blocked) UI thread, so Wait cannot deadlock.
+                try { Task.Run(() => Services.TransferTotalsService.SaveAsync(lifetimeTotals)).Wait(TimeSpan.FromSeconds(1)); } catch { }
+                if (mountService is { } ms)
+                    try { Task.Run(ms.UnmountAllAsync).Wait(TimeSpan.FromSeconds(3)); } catch { }
+                try { trayIcon.Visible = false; } catch { }
+                PowerGuard.Apply(Handle, null);
+                shutdownComplete = true;
+            }
+            base.WndProc(ref m);
         }
 
         private async Task DetectRcloneAsync()
@@ -730,6 +784,7 @@ namespace RcloneMount
                         "Locate rclone", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
+                if (!await UploadsGuardAsync(mounts, "Switch", interactive: true)) return;
 
                 rcloneInfo = info;
                 lblRcloneInstalled.Text = $"Installed: {info.Version}   —   {info.ExecutablePath}";

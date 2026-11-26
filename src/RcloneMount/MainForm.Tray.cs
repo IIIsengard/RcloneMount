@@ -130,6 +130,7 @@ namespace RcloneMount
         private async Task UnmountFromTrayAsync(Mount m)
         {
             if (mountService is null) return;
+            if (!await UploadsGuardAsync(new[] { m }, "Unmount", interactive: true)) return;
             try
             {
                 await mountService.UnmountAsync(m);

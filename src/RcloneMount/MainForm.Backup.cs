@@ -107,6 +107,7 @@ namespace RcloneMount
                 "Your current settings will be backed up first so this can be undone.",
                 "Restore settings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (ok != DialogResult.Yes) return;
+            if (!await UploadsGuardAsync(mounts, "Restore", interactive: true)) return;
 
             try
             {
@@ -147,6 +148,7 @@ namespace RcloneMount
                 "Your current settings will be backed up first so this can be undone.",
                 "Restore settings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (ok != DialogResult.Yes) return;
+            if (!await UploadsGuardAsync(mounts, "Restore", interactive: true)) return;
 
             try
             {

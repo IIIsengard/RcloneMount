@@ -31,7 +31,8 @@ namespace RcloneMount.Services
         public sealed record Request(Command Command, string? Name);
 
         // ExitCode mirrors what the CLI process should return: 0 success, 2 unknown
-        // remote/mount, 3 mount timeout, 4 no resident, 5 other error. Kept small so
+        // remote/mount, 3 mount timeout, 4 no resident, 5 other error, 6 unmount refused
+        // because mount uploads are still pending. Kept small so
         // shell scripts can if-branch on it.
         public sealed record MountEntry(string RemoteName, string RemotePath, string DriveLetter, bool Mounted);
         public sealed record Response(int ExitCode, string Message, IReadOnlyList<MountEntry>? Mounts = null);

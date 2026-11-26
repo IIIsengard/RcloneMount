@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using RcloneMount.Services;
@@ -16,6 +17,10 @@ namespace RcloneMount
         // previous poll is still running (backend is slow, /operations/about took a
         // while), we skip the new tick instead of racing on lastSamples/lastAbout.
         private bool statsPollInFlight;
+
+        // Mount uploads not finished, summed at the last poll (0 when the poll failed, so a
+        // broken poll can never hold the PC awake).
+        private int uploadsPendingTotal;
 
         private void StartStatsPolling()
         {
@@ -48,6 +53,7 @@ namespace RcloneMount
                 aggregateDownBytesPerSecond = stats.DownBytesPerSecond;
                 aggregateUpBytesPerSecond   = stats.UpBytesPerSecond;
                 lastTransfers = stats.ActiveTransfers;
+                uploadsPendingTotal = stats.PerMount.Values.Sum(s => s.UploadsPending);
                 AccumulateLifetimeTotals(stats);
             }
             catch
@@ -56,6 +62,7 @@ namespace RcloneMount
                 aggregateDownBytesPerSecond = 0;
                 aggregateUpBytesPerSecond = 0;
                 lastTransfers = Array.Empty<TransferInfo>();
+                uploadsPendingTotal = 0;
             }
             if (stats is not null)
             {
@@ -83,8 +90,20 @@ namespace RcloneMount
             }
             UpdateStatusBar();
             RefreshActiveList();
+            UpdatePowerGuard();
             statsPollInFlight = false;
         }
+
+        // Re-applied on every poll and job change, not only on transitions: hide/show to tray
+        // toggles ShowInTaskbar, which recreates the window handle and drops its shutdown reason.
+        private void UpdatePowerGuard()
+        {
+            if (shutdownComplete || !IsHandleCreated) return;
+            PowerGuard.Apply(Handle, CurrentBusyReason());
+        }
+
+        private string? CurrentBusyReason() => PowerGuard.BusyReason(
+            jobQueue?.Snapshot().Count(r => r.State == Models.JobRunState.Running) ?? 0, uploadsPendingTotal);
 
         // Push the fresh per-mount rate onto any MountRow currently visible in the mounts
         // card. Rows are transient (recreated on rebuild) so we walk the panel instead of
@@ -96,6 +115,7 @@ namespace RcloneMount
                 if (c is MountRow row && perMount.TryGetValue(row.Mount.Id, out var sample))
                 {
                     row.UpdateLiveRate(sample.BytesPerSecond);
+                    row.UpdateUploadsPending(sample.UploadsPending);
                     // Only push when the poller has a fresh reading. A transient failure
                     // (Google Drive's /operations/about routinely trips the 2s HTTP
                     // timeout) would otherwise blank the bar for 30s until the cache
@@ -123,6 +143,7 @@ namespace RcloneMount
                 if (sample.Healthy)
                 {
                     unhealthyPollHits.Remove(m.Id);
+                    recoverDeferred.Remove(m.Id);
                     if (detachedMountIds.Remove(m.Id))
                     {
                         changed = true;
@@ -145,7 +166,9 @@ namespace RcloneMount
                     if (m.AutoMount)
                     {
                         Notify("Mount detached — auto-recovering",
-                            $"{m.RemoteName} → {m.DriveLetter} isn't responding. Killing and remounting…",
+                            sample.UploadsPending > 0
+                                ? $"{m.RemoteName} → {m.DriveLetter} isn't responding. Remounting after its pending uploads finish…"
+                                : $"{m.RemoteName} → {m.DriveLetter} isn't responding. Killing and remounting…",
                             ToolTipIcon.Warning, 5000);
                         OnMountDetached(m);
                     }
@@ -153,6 +176,24 @@ namespace RcloneMount
                     {
                         Notify("Mount detached",
                             $"{m.RemoteName} → {m.DriveLetter} isn't responding. Try Unmount + Mount to recover.",
+                            ToolTipIcon.Warning, 5000);
+                    }
+                }
+                // Auto-recover is holding off for this mount's uploads.
+                else if (recoverDeferred.TryGetValue(m.Id, out var d) && !d.Requeued)
+                {
+                    if (sample.UploadsPending == 0)
+                    {
+                        // Done, or its RC stayed quiet past the poller's keep window: kill and remount now.
+                        recoverDeferred[m.Id] = d with { Requeued = true };
+                        OnMountDetached(m);
+                    }
+                    else if (!d.Notified && DateTime.UtcNow - d.SinceUtc > RecoverDeferralNotifyAfter)
+                    {
+                        recoverDeferred[m.Id] = d with { Notified = true };
+                        var n = sample.UploadsPending;
+                        Notify("Mount waiting for uploads",
+                            $"{m.DriveLetter} is waiting for {(n == 1 ? "1 upload" : $"{n} uploads")} to finish before it reconnects.",
                             ToolTipIcon.Warning, 5000);
                     }
                 }
@@ -168,6 +209,7 @@ namespace RcloneMount
         {
             unhealthyPollHits.Remove(mountId);
             detachedMountIds.Remove(mountId);
+            recoverDeferred.Remove(mountId);
         }
 
         // Adds the poller's per-tick delta to the lifetime counters, splitting by the

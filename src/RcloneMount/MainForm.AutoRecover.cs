@@ -136,6 +136,20 @@ namespace RcloneMount
 
                 if (isMounted && isDetached)
                 {
+                    // rclone still answers and has uploads queued: killing it now stops them.
+                    // The detach watchdog queues recovery again once the count reaches 0.
+                    if (!await UploadsGuardAsync(new[] { m }, "Auto-recover", interactive: false))
+                    {
+                        if (recoverDeferred.TryGetValue(m.Id, out var d))
+                            recoverDeferred[m.Id] = d with { Requeued = false };
+                        else
+                        {
+                            recoverDeferred[m.Id] = new RecoverDeferral(DateTime.UtcNow, Requeued: false, Notified: false);
+                            activityLog.Info($"Auto-recover ({reason}): {m.DriveLetter} still has uploads pending; remounting after they finish.");
+                        }
+                        continue;
+                    }
+                    recoverDeferred.Remove(m.Id);
                     // Process is alive but the drive letter has stopped answering. The
                     // watchdog can't distinguish "hung" from "will recover on its own"
                     // beyond the DetachHitThreshold it's already waited, so kill and

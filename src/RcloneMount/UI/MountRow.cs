@@ -26,6 +26,8 @@ namespace RcloneMount.UI
         // Live throughput (bytes/sec) set by the stats poller; drawn under the meta line
         // when > 0. Cleared automatically when the row is rebound to a non-mounted state.
         private double liveRate;
+        // Mount uploads rclone has not finished (vfs/stats), drawn on the title row when > 0.
+        private int uploadsPending;
 
         // Backend space (from rclone /operations/about). Zero-total means "not known" —
         // either the backend doesn't support about or we haven't polled yet.
@@ -169,6 +171,8 @@ namespace RcloneMount.UI
             // A detached mount has no live throughput; clear so the strip disappears rather
             // than lying with a stale reading until the next rebind.
             if (!mounted) liveRate = 0;
+            // A detached mount's rclone can still be uploading, so only a stopped row clears it.
+            if (!mounted && !detached) UpdateUploadsPending(0);
             // Space info is only meaningful for a live mount — a stopped/detached row
             // shouldn't advertise a possibly-stale bar. It'll repopulate on next poll.
             if (!mounted) { spaceTotalBytes = 0; spaceUsedBytes = 0; }
@@ -186,6 +190,16 @@ namespace RcloneMount.UI
             liveRate = bytesPerSecond;
             if (newLabel != oldLabel) Invalidate();
         }
+
+        public void UpdateUploadsPending(int count)
+        {
+            if (count == uploadsPending) return;
+            uploadsPending = count;
+            AccessibleDescription = count > 0 ? FormatUploadsPending(count) : null;
+            Invalidate();
+        }
+
+        private static string FormatUploadsPending(int n) => n == 1 ? "1 upload pending" : $"{n} uploads pending";
 
         // Backend total/used bytes. Pass total=0 to hide the space strip (used when the
         // backend doesn't implement /operations/about). Same "only repaint when the
@@ -278,6 +292,16 @@ namespace RcloneMount.UI
                 TextRenderer.DrawText(g, rateText, metaFont,
                     new Rectangle(textRight - rateW, 12, rateW, 18), Theme.Accent,
                     TextFormatFlags.NoPrefix | TextFormatFlags.Right);
+            }
+            if (uploadsPending > 0 && (mounted || detached))
+            {
+                // Warn colour: these files are not in the cloud yet.
+                var pendingText = FormatUploadsPending(uploadsPending);
+                var pendingW = TextRenderer.MeasureText(pendingText, metaFont).Width;
+                TextRenderer.DrawText(g, pendingText, metaFont,
+                    new Rectangle(textRight - titleRightReserve - pendingW, 12, pendingW, 18), Theme.Warn,
+                    TextFormatFlags.NoPrefix | TextFormatFlags.Right);
+                titleRightReserve += pendingW + 8;
             }
 
             TextRenderer.DrawText(g, title, titleFont,

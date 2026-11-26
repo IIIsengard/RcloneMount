@@ -324,6 +324,7 @@ namespace RcloneMount
                 {
                     RefreshActiveList();
                     NotifyNewFailures();
+                    UpdatePowerGuard();
                 }));
             }
             catch (InvalidOperationException) { /* handle disposed mid-invoke */ }
@@ -512,6 +513,7 @@ namespace RcloneMount
                 + $"not just this one row. Apps with files open on {driveLetter} will see I/O errors.",
                 "Unmount drive", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (res != DialogResult.Yes) return;
+            if (!await UploadsGuardAsync(new[] { mount }, "Unmount", interactive: true)) return;
 
             try
             {

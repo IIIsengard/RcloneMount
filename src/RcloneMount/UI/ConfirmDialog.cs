@@ -78,11 +78,7 @@ namespace RcloneMount.UI
             // Style the confirm button distinctly. Destructive → warn palette; benign → accent.
             if (destructive)
             {
-                btnConfirm.BackColor = Theme.Warn;
-                btnConfirm.ForeColor = Color.White;
-                btnConfirm.FlatAppearance.BorderColor = Theme.Warn;
-                btnConfirm.FlatAppearance.MouseOverBackColor = DarkenBy(Theme.Warn, 0.10f);
-                btnConfirm.FlatAppearance.MouseDownBackColor = DarkenBy(Theme.Warn, 0.18f);
+                StyleDestructive(btnConfirm);
             }
             else
             {
@@ -92,6 +88,16 @@ namespace RcloneMount.UI
                 btnConfirm.FlatAppearance.MouseOverBackColor = Theme.AccentHover;
                 btnConfirm.FlatAppearance.MouseDownBackColor = Theme.AccentHover;
             }
+        }
+
+        // Warn palette for a button that loses data or work; call after DialogTheme.Apply.
+        internal static void StyleDestructive(Button b)
+        {
+            b.BackColor = Theme.Warn;
+            b.ForeColor = Color.White;
+            b.FlatAppearance.BorderColor = Theme.Warn;
+            b.FlatAppearance.MouseOverBackColor = DarkenBy(Theme.Warn, 0.10f);
+            b.FlatAppearance.MouseDownBackColor = DarkenBy(Theme.Warn, 0.18f);
         }
 
         private static void DrawWarningGlyph(Graphics g, Rectangle rect, bool destructive)

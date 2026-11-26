@@ -95,6 +95,23 @@ changes (e.g. `settings.json` shape changes that need a migration).
   in place; only new rows are constructed, only vanished rows disposed.
 
 ### Added
+- **Mounts no longer lose pending uploads.** Mount rows show "N uploads
+  pending" while rclone still holds write-backs that are not in the cloud
+  yet. Exit, Unmount, Remove mount, Restore, Locate rclone and both
+  updates now ask first: Wait until they finish, go ahead anyway, or
+  cancel. Waiting never treats an rclone that stops answering as "done".
+  Removing, renaming or deleting a remote says plainly that its pending
+  files will not be uploaded. Auto-update and the auto-recover remount
+  wait instead of cutting uploads off, and auto-recover shows one balloon
+  if it has waited more than 10 minutes.
+  `RcloneMount.exe --unmount NAME` refuses with exit code 6 while uploads
+  are pending.
+- **Keeps the PC awake and holds shutdown during work.** While a transfer
+  job runs or mount uploads are pending, the PC will not idle-sleep. If
+  you shut down or sign out while the RcloneMount window is open, Windows
+  lists it with the reason and you can still choose "Shut down anyway".
+  While RcloneMount sits hidden in the tray, Windows does not allow an
+  app to hold shutdown, so only the keep-awake applies.
 - **Encrypted `rclone.conf` support.** RcloneMount asks for the config
   password once and keeps it protected for your Windows account (DPAPI,
   under `%AppData%\RcloneMount`). It passes the password to every mount,

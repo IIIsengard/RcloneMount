@@ -95,6 +95,14 @@ namespace RcloneMount
 
             if (!rcloneNeedsUpdate && !winFspNeedsUpdate) return;
 
+            // Both updates unmount everything; an unattended update must not cut off uploads.
+            if (!await UploadsGuardAsync(mounts, "Auto-update", interactive: false))
+            {
+                SetStatus("Auto-update skipped: mount uploads are still pending.");
+                activityLog.Info("Auto-update skipped: mount uploads are still pending.");
+                return;
+            }
+
             var progress = new Progress<string>(SetStatus);
             try
             {
@@ -259,9 +267,17 @@ namespace RcloneMount
                 btnInstallAppUpdate.Enabled = false;
                 SetStatus("Downloading RcloneMount update...");
                 await appUpdateManager.DownloadUpdatesAsync(pendingAppUpdate);
-                // Velopack applies after we exit; the normal close path unmounts and saves totals.
+                // Ask once, after the download: unmounting here keeps the close path from asking again.
+                if (!await UploadsGuardAsync(mounts, "Update", interactive: true))
+                {
+                    SetStatus("RcloneMount update postponed: mount uploads are still pending.");
+                    btnInstallAppUpdate.Enabled = true;
+                    return;
+                }
+                // Velopack applies after we exit; the normal close path saves totals.
                 SetStatus("Closing to install update...");
                 appUpdateManager.WaitExitThenApplyUpdates(pendingAppUpdate.TargetFullRelease, silent: false, restart: true);
+                if (mountService is not null) await mountService.UnmountAllAsync();
                 exitFromTray = true;
                 Close();
             }
@@ -333,6 +349,7 @@ namespace RcloneMount
                 "Any active mounts will be unmounted first.",
                 "Install rclone update", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (choice != DialogResult.Yes) return;
+            if (!await UploadsGuardAsync(mounts, "Update", interactive: true)) return;
 
             try
             {

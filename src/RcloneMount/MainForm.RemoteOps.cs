@@ -372,6 +372,12 @@ namespace RcloneMount
                         SetStatus("Rename cancelled.");
                         return;
                     }
+                    // The remount uses the new name, so files queued under the old one never upload.
+                    if (!await UploadsGuardAsync(running, "Rename", interactive: true, resumes: false))
+                    {
+                        SetStatus("Rename cancelled.");
+                        return;
+                    }
                     mountsToRemount = running;
                 }
             }
@@ -438,6 +444,9 @@ namespace RcloneMount
             if (ConfirmDialog.Show(this, "Delete service",
                     $"Delete remote '{selected.Name}' from rclone.conf?{extra}",
                     confirmText: "Delete") != DialogResult.Yes)
+                return;
+            if (!await UploadsGuardAsync(mounts.Where(m => string.Equals(m.RemoteName, selected.Name, StringComparison.Ordinal)),
+                    "Delete", interactive: true, resumes: false))
                 return;
 
             try

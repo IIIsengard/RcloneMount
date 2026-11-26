@@ -49,7 +49,8 @@ namespace RcloneMount
 
         private void SchedulerTick()
         {
-            if (jobService is null) return;
+            // shutdownStarted: Exit is waiting on the uploads prompt or tearing down; start nothing new.
+            if (jobService is null || shutdownStarted) return;
             var now = DateTimeOffset.Now;
             foreach (var job in jobs)
             {

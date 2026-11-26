@@ -57,6 +57,7 @@ Exit codes:
 | 3 | Mount did not become ready in time. |
 | 4 | Tray process not running. Start RcloneMount first. |
 | 5 | Other error (details on stderr). |
+| 6 | Not unmounted: the mount still has uploads pending. Try again when they finish. |
 
 ## Where data lives
 
