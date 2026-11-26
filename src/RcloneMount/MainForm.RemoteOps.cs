@@ -46,7 +46,7 @@ namespace RcloneMount
                         activityLog.Info($"Auto-mount: {requestedLetter} was taken — using {chosen} for {m.RemoteName}.");
                     }
                     SetStatus($"Auto-mounting {m.RemoteName} at {m.DriveLetter}...");
-                    await mountService.MountAsync(m);
+                    await StartRcloneAsync(m);
                     RefreshMountList();
                     var ready = await WaitForDriveReadyAsync(m.DriveLetter, TimeSpan.FromSeconds(15));
                     if (ready)

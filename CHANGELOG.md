@@ -41,6 +41,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **`--mount` picks another drive letter when yours is taken**, like the Mount button does.
 - **You are told when settings cannot be saved.** The failure appears in the log and as a
   tray notice, once until saving works again.
+- **Restore stops transfers and mounts first.** It tells you they will be cancelled, and
+  does not start while an rclone terminal opened from the app is still open.
+- **A restore that fails changes nothing.** A damaged backup, or a file that cannot be
+  replaced, leaves your settings and rclone.conf as they were.
+- **Transfer totals keep counting** after restoring a backup that does not include them.
+- **Mounting from the tray picks another drive letter when yours is taken.**
+- **A mount that fails to start shows your chosen drive letter again**, not the substitute.
 - **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
   jobs started by hand stayed on "never run".
 - **Saving a new job twice no longer creates a duplicate.**

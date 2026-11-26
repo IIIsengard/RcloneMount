@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using RcloneMount.Models;
@@ -164,7 +166,7 @@ public class SettingsSaveTests
 
             Assert.Equal("Light", Saved().ThemePreference);
         }
-        finally { SettingsService.Restored = false; }
+        finally { ResetRestored(); }
     }
 
     [Fact]
@@ -184,7 +186,199 @@ public class SettingsSaveTests
             Assert.Equal("Light", Saved().ThemePreference);
             Assert.Equal(1, TransferTotalsService.Load().DownBytes);
         }
-        finally { SettingsService.Restored = false; }
+        finally { ResetRestored(); }
+    }
+
+    [Fact]
+    public async Task RestoreWithoutTotals_LeavesTotalSavingOn()
+    {
+        File.Delete(TransferTotalsService.FilePath);
+        var backup = await BackupOf(new AppSettings { ThemePreference = "Light" });
+        try
+        {
+            SettingsService.RestoreFromBackup(backup);
+
+            await TransferTotalsService.SaveAsync(new TransferTotals { DownBytes = 999 }); // the exit save
+
+            Assert.Equal(999, TransferTotalsService.Load().DownBytes);
+        }
+        finally { ResetRestored(); }
+    }
+
+    // rclone.conf cannot be replaced here (a folder sits on its path), after settings.json already was.
+    [Fact]
+    public async Task RestoreThatFailsPartway_ChangesNothing()
+    {
+        var conf = SettingsService.RcloneConfigPathOverride!;
+        Directory.CreateDirectory(Path.GetDirectoryName(conf)!);
+        File.WriteAllText(conf, "[a]\ntype = local\n");
+        var backup = await BackupOf(new AppSettings { ThemePreference = "Light" });
+        File.Delete(conf);
+        await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Dark" });
+        await TransferTotalsService.SaveAsync(new TransferTotals { DownBytes = 7 });
+        Directory.CreateDirectory(conf);
+        try
+        {
+            Assert.ThrowsAny<Exception>(() => SettingsService.RestoreFromBackup(backup));
+
+            Assert.Equal("Dark", Saved().ThemePreference);
+            Assert.Equal(7, TransferTotalsService.Load().DownBytes);
+            Assert.Empty(Directory.GetFiles(TestIsolation.Dir, "*.tmp", SearchOption.AllDirectories));
+            await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Auto" });
+            Assert.Equal("Auto", Saved().ThemePreference); // saving stays on
+        }
+        finally
+        {
+            Directory.Delete(conf);
+            ResetRestored();
+        }
+    }
+
+    [Theory]
+    [InlineData(".zip")]
+    [InlineData(".json")]
+    public async Task RestoreOfUnreadableSettings_ChangesNothing(string extension)
+    {
+        await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Dark" });
+        var bad = Path.Combine(TestIsolation.Dir, "bad-settings" + extension);
+        File.Delete(bad);
+        if (extension == ".zip")
+        {
+            using var zip = ZipFile.Open(bad, ZipArchiveMode.Create);
+            using var w = new StreamWriter(zip.CreateEntry("settings.json").Open());
+            w.Write("{ cut off");
+        }
+        else File.WriteAllText(bad, "{ cut off");
+        try
+        {
+            Assert.Throws<InvalidDataException>(() => SettingsService.RestoreFromBackup(bad));
+
+            Assert.Equal("Dark", Saved().ThemePreference);
+        }
+        finally { ResetRestored(); }
+    }
+
+    [Fact]
+    public async Task Restore_RunsOnlyAfterRunningAndQueuedTransfersStopped()
+    {
+        var (form, queue) = RestoreShell();
+        var running = AddRun(queue, JobRunState.Running);
+        running.Cts!.Token.Register(() => _ = Task.Run(async () =>
+        {
+            await Task.Delay(300); // rclone takes a moment to quit
+            running.State = JobRunState.Cancelled;
+        }));
+        var queued = AddRun(queue, JobRunState.Queued);
+        var retry = new CancellationTokenSource();
+        var token = retry.Token;
+        ((Dictionary<string, CancellationTokenSource>)Get(form, "retryCts")!)["m"] = retry;
+        Set(form, "schedulerTimer", new System.Windows.Forms.Timer());
+        JobRunState[]? atRestore = null;
+
+        await StopWritersThen(form, () => atRestore = new[] { running.State, queued.State });
+
+        Assert.Equal(new[] { JobRunState.Cancelled, JobRunState.Cancelled }, atRestore);
+        Assert.True(token.IsCancellationRequested, "remount retry still scheduled");
+        Assert.Null(Get(form, "schedulerTimer")); // the app is about to restart
+    }
+
+    [Fact]
+    public async Task Restore_IsRefusedWhenATransferWillNotStop_AndSchedulingResumes()
+    {
+        var (form, queue) = RestoreShell();
+        AddRun(queue, JobRunState.Running); // never ends
+        Set(form, "schedulerTimer", new System.Windows.Forms.Timer());
+        var restored = false;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StopWritersThen(form, () => restored = true, TimeSpan.FromMilliseconds(300)));
+
+        Assert.False(restored);
+        Assert.NotNull(Get(form, "schedulerTimer"));
+    }
+
+    [Fact]
+    public async Task FailedRestore_ResumesScheduling()
+    {
+        var (form, _) = RestoreShell();
+        Set(form, "schedulerTimer", new System.Windows.Forms.Timer());
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => StopWritersThen(form, () => throw new InvalidDataException("bad backup")));
+
+        Assert.NotNull(Get(form, "schedulerTimer"));
+    }
+
+    [Fact]
+    public async Task Restore_IsRefusedWhileAnRcloneTerminalIsOpen()
+    {
+        var (form, _) = RestoreShell();
+        // Stands in for the terminal: no window, and it exits when its input closes.
+        using var terminal = Process.Start(new ProcessStartInfo("cmd.exe", "/c set /p x=")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
+        })!;
+        RcloneConfigService.Terminals.Add(terminal);
+        var restored = false;
+        try
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => StopWritersThen(form, () => restored = true));
+
+            Assert.Contains("terminal", ex.Message);
+            Assert.False(restored);
+
+            terminal.StandardInput.Close();
+            await terminal.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await StopWritersThen(form, () => restored = true); // closed: goes ahead
+
+            Assert.True(restored);
+        }
+        finally
+        {
+            terminal.StandardInput.Close();
+            RcloneConfigService.Terminals.Remove(terminal);
+        }
+    }
+
+    [Fact]
+    public void RestoreConfirmation_SaysWhatWillBeStopped()
+    {
+        var text = MainForm.RestoreWarning("Restore?", activeTransfers: 2);
+
+        Assert.StartsWith("Restore?", text);
+        Assert.Contains("2 running or queued transfer(s) will be cancelled", text);
+        Assert.Contains("rclone terminal", text);
+        Assert.Contains("Any transfer running by then will be cancelled", MainForm.RestoreWarning("Restore?", activeTransfers: 0));
+    }
+
+    private static (MainForm, JobQueueService) RestoreShell()
+    {
+        var form = Shell(new Mount(), configured: "M:");
+        var queue = new JobQueueService(new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe")));
+        Set(form, "jobQueue", queue);
+        Set(form, "retryCts", new Dictionary<string, CancellationTokenSource>());
+        return (form, queue);
+    }
+
+    // Puts a run straight into the queue's list, so no rclone is started.
+    private static JobRun AddRun(JobQueueService queue, JobRunState state)
+    {
+        var run = new JobRun { Spec = new JobSpec(), State = state };
+        if (state == JobRunState.Running) run.Cts = new CancellationTokenSource();
+        ((List<JobRun>)typeof(JobQueueService).GetField("runs", Private)!.GetValue(queue)!).Add(run);
+        return run;
+    }
+
+    private static Task StopWritersThen(MainForm form, Action restore, TimeSpan? timeout = null) =>
+        (Task)typeof(MainForm).GetMethod("RestoreWithWritersStoppedAsync", Private)!
+            .Invoke(form, new object[] { restore, timeout ?? TimeSpan.FromSeconds(10) })!;
+
+    private static object? Get(MainForm form, string name) => typeof(MainForm).GetField(name, Private)!.GetValue(form);
+
+    private static void ResetRestored()
+    {
+        SettingsService.Restored = false;
+        SettingsService.TotalsRestored = false;
     }
 
     [Fact]

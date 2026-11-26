@@ -205,8 +205,10 @@ namespace RcloneMount.Services
         }
 
         // Set by a successful restore: the app is about to restart, and nothing it still holds in
-        // memory may overwrite the restored files. Only touched under saveGate; tests reset it.
+        // memory may overwrite the restored files. Totals only when the backup held them, or the
+        // exit save would be lost. Only touched under saveGate; tests reset them.
         internal static bool Restored { get; set; }
+        internal static bool TotalsRestored { get; set; }
 
         public static async Task SaveAsync(AppSettings settings)
         {
@@ -274,12 +276,11 @@ namespace RcloneMount.Services
         // Scheduler completions, UI actions and timers all save; one at a time.
         private static readonly System.Threading.SemaphoreSlim saveGate = new(1, 1);
 
-        // For the other files a restore brings back. Under saveGate, so a write already on its way
-        // cannot land on top of the restored file.
-        internal static void WriteUnlessRestored(string path, string text)
+        // Under saveGate, so a totals write already on its way cannot land on top of restored totals.
+        internal static void WriteUnlessTotalsRestored(string path, string text)
         {
             saveGate.Wait();
-            try { if (!Restored) WriteAtomic(path, text); }
+            try { if (!TotalsRestored) WriteAtomic(path, text); }
             finally { saveGate.Release(); }
         }
 
@@ -432,22 +433,19 @@ namespace RcloneMount.Services
             saveGate.Wait();
             try
             {
-                RestoreFiles(backupPath);
+                TotalsRestored = RestoreFiles(backupPath);
                 Restored = true; // only on success: after a failed restore the app carries on saving
             }
             finally { saveGate.Release(); }
         }
 
-        // Caller holds saveGate.
-        private static void RestoreFiles(string backupPath)
+        // Caller holds saveGate. All or nothing: the backup is read and checked in full before
+        // any file is touched. Returns whether it held transfer totals.
+        private static bool RestoreFiles(string backupPath)
         {
-            var directory = Path.GetDirectoryName(SettingsFilePath);
-            if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
-                Directory.CreateDirectory(directory);
-
-            if (File.Exists(SettingsFilePath))
-                BackupCurrentFile();
-
+            var files = new List<(string Target, byte[] Content)>();
+            byte[]? log = null;
+            var hasTotals = false;
             var ext = Path.GetExtension(backupPath);
             if (ext.Equals(".zip", StringComparison.OrdinalIgnoreCase))
             {
@@ -456,61 +454,119 @@ namespace RcloneMount.Services
                 if (settingsEntry is null)
                     throw new InvalidDataException("Backup zip is missing settings.json.");
 
-                WriteAtomic(SettingsFilePath, ReadEntryText(settingsEntry));
+                files.Add((SettingsFilePath, CheckedSettings(ReadEntryText(settingsEntry))));
 
                 var rcloneEntry = zip.GetEntry("rclone.conf");
                 if (rcloneEntry is not null)
-                {
-                    var rclonePath = ResolveRcloneConfigPath();
-                    var rcloneDir = Path.GetDirectoryName(rclonePath);
-                    if (!string.IsNullOrWhiteSpace(rcloneDir) && !Directory.Exists(rcloneDir))
-                        Directory.CreateDirectory(rcloneDir);
-                    WriteAtomic(rclonePath, ReadEntryText(rcloneEntry));
-                }
+                    files.Add((ResolveRcloneConfigPath(), System.Text.Encoding.UTF8.GetBytes(ReadEntryText(rcloneEntry))));
 
-                // Full-state restore — put activity.log back too so the user can resume
-                // with their history intact.
-                var logEntry = zip.GetEntry("activity.log");
-                if (logEntry is not null)
-                {
-                    var logDir = Path.GetDirectoryName(ActivityLogPath);
-                    if (!string.IsNullOrWhiteSpace(logDir) && !Directory.Exists(logDir))
-                        Directory.CreateDirectory(logDir);
-                    try
-                    {
-                        using var s = logEntry.Open();
-                        using var f = File.Create(ActivityLogPath);
-                        s.CopyTo(f);
-                    }
-                    catch
-                    {
-                        // Log may be held open by the running app — that's the current
-                        // process, which is about to exit and restart, so silently skip.
-                    }
-                }
                 // Lifetime transfer counters — restore alongside so the number keeps its
                 // meaning after a machine migration.
                 var totalsEntry = zip.GetEntry("transfer-totals.json");
                 if (totalsEntry is not null)
                 {
-                    var totalsPath = TransferTotalsService.FilePath;
-                    var totalsDir = Path.GetDirectoryName(totalsPath);
-                    if (!string.IsNullOrWhiteSpace(totalsDir) && !Directory.Exists(totalsDir))
-                        Directory.CreateDirectory(totalsDir);
-                    try
-                    {
-                        using var s = totalsEntry.Open();
-                        using var f = File.Create(totalsPath);
-                        s.CopyTo(f);
-                    }
-                    catch { }
+                    files.Add((TransferTotalsService.FilePath, ReadEntryBytes(totalsEntry)));
+                    hasTotals = true;
                 }
+
+                var logEntry = zip.GetEntry("activity.log");
+                if (logEntry is not null)
+                    log = ReadEntryBytes(logEntry);
             }
             else
             {
-                File.Copy(backupPath, SettingsFilePath, overwrite: true);
+                files.Add((SettingsFilePath, CheckedSettings(File.ReadAllText(backupPath))));
+            }
+
+            if (File.Exists(SettingsFilePath))
+                BackupCurrentFile();
+
+            ReplaceAll(files);
+
+            // Full-state restore — put activity.log back too so the user can resume
+            // with their history intact. History only, so it never fails the restore.
+            if (log is not null)
+            {
+                try { File.WriteAllBytes(ActivityLogPath, log); }
+                catch
+                {
+                    // Log may be held open by the running app — that's the current
+                    // process, which is about to exit and restart, so silently skip.
+                }
             }
             TrimBackups();
+            return hasTotals;
+        }
+
+        // A backup that would not load must not replace settings that do.
+        private static byte[] CheckedSettings(string json)
+        {
+            try
+            {
+                if (JsonSerializer.Deserialize<AppSettings>(json) is not null)
+                    return System.Text.Encoding.UTF8.GetBytes(json);
+            }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException)
+            {
+                throw new InvalidDataException($"The backup's settings cannot be read: {ex.Message}", ex);
+            }
+            throw new InvalidDataException("The backup's settings are empty.");
+        }
+
+        // Stages every file beside its target, then swaps them in. If one cannot be swapped, those
+        // already done are put back.
+        // shortcut: a crash between two swaps leaves a mix; add a restore journal if that is ever
+        // seen (the pre-restore backup covers recovery by hand).
+        private static void ReplaceAll(IReadOnlyList<(string Target, byte[] Content)> files)
+        {
+            var staged = new List<(string Target, string Temp, byte[]? Original)>();
+            var swapped = 0;
+            try
+            {
+                foreach (var (target, content) in files)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    var temp = $"{target}.{Guid.NewGuid():N}.tmp";
+                    staged.Add((target, temp, File.Exists(target) ? File.ReadAllBytes(target) : null));
+                    File.WriteAllBytes(temp, content);
+                }
+                foreach (var file in staged)
+                {
+                    File.Move(file.Temp, file.Target, overwrite: true);
+                    swapped++;
+                }
+            }
+            catch (Exception ex)
+            {
+                var stuck = new List<string>();
+                foreach (var file in staged.Take(swapped))
+                {
+                    try
+                    {
+                        if (file.Original is null) File.Delete(file.Target);
+                        else WriteAtomic(file.Target, file.Original);
+                    }
+                    catch { stuck.Add(file.Target); }
+                }
+                if (stuck.Count == 0) throw;
+                throw new IOException($"{ex.Message} These files could not be put back and still hold the backup's " +
+                    $"content: {string.Join(", ", stuck)}. Your previous settings are in the backups folder.", ex);
+            }
+            finally
+            {
+                foreach (var file in staged)
+                {
+                    try { if (File.Exists(file.Temp)) File.Delete(file.Temp); } catch { }
+                }
+            }
+        }
+
+        private static byte[] ReadEntryBytes(ZipArchiveEntry entry)
+        {
+            using var s = entry.Open();
+            using var memory = new MemoryStream();
+            s.CopyTo(memory);
+            return memory.ToArray();
         }
 
         private static string ReadEntryText(ZipArchiveEntry entry)
