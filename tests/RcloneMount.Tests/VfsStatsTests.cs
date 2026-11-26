@@ -61,7 +61,12 @@ public class VfsStatsTests
             using var dav = new HttpClient();
             (await dav.PutAsync($"http://127.0.0.1:{davPort}/a.txt", new StringContent("hello"))).EnsureSuccessStatusCode();
 
-            Assert.Equal(1, await RcloneStatsPoller.FetchUploadsPendingAsync(rcPort));
+            // On a loaded PC one request can pass the app's 2 s RC timeout: that reads as null ("unknown"),
+            // so ask again. The upload stays queued for the 60 s write-back.
+            int? pending = null;
+            for (var i = 0; i < 20 && pending is null; i++)
+                pending = await RcloneStatsPoller.FetchUploadsPendingAsync(rcPort);
+            Assert.Equal(1, pending);
         }
         finally
         {

@@ -780,7 +780,6 @@ public class UiTextTests
             new TransferJob { Id = "d", SourceRemote = ":sftp,host=x", DestRemote = "r,opt=1" },
             new TransferJob { Id = "e", SourceRemote = "elsewhere", ExtraFlags = "--config other.conf" },
             new TransferJob { Id = "f", SourceRemote = "elsewhere2", ExtraFlags = "--config=other.conf" },
-            new TransferJob { Id = "g", SourceRemote = "elsewhere3", ExtraFlags = "--password-command \"cmd /c echo x\"" },
         };
         var before = untouched.Select(j => (j.SourceRemote, j.DestRemote)).ToArray();
         ((List<TransferJob>)Get(form, "jobs")!).AddRange(untouched.Prepend(wrongCase).Prepend(job));
@@ -889,10 +888,10 @@ public class UiTextTests
         Assert.Equal("fresh", job.SourceRemote);
     });
 
-    // A job with its own --config or password command is judged by that run, never by another job's check.
+    // A job whose --config names another file is judged by that run, never by another job's check.
     [Theory]
     [InlineData("--config other.conf")]
-    [InlineData("--password-command=\"cmd /c echo x\"")]
+    [InlineData("--config=other.conf --password-command=\"cmd /c echo x\"")]
     public void MarkingOneJob_LeavesOwnConfigJobsRunsAndWindowsAlone(string flags) => Sta(() =>
     {
         var (form, log) = RemoteShell(Dump("r"));
@@ -922,6 +921,84 @@ public class UiTextTests
         Assert.Equal(JobRunState.Cancelled, plainQueued.State);
         Assert.StartsWith("gone (", ((ThemedDropDown)Of(open, "cbSourceRemote")).SelectedText);
         Assert.DoesNotContain("separate", Assert.Single(log, e => e.Level == ActivityLevel.Warn).Message);
+    });
+
+    // Flags that open the config the app reads: "{0}" is that file, "{1}" the same one written differently.
+    public static TheoryData<string> SharedConfigFlags => new()
+    {
+        "--password-command \"cmd /c echo x\"",
+        "--password-command=x",
+        "--config \"{0}\"",
+        "\"--config={1}\" --password-command=x",
+        "--config other.conf --config \"{0}\"", // rclone takes the last one
+    };
+
+    private static string SharedFlags(string template)
+    {
+        var path = SettingsService.ResolveRcloneConfigPath();
+        Assert.StartsWith(TestIsolation.Dir, path);
+        var other = Path.GetRelativePath(Environment.CurrentDirectory, path).ToUpperInvariant();
+        return string.Format(template, path, other);
+    }
+
+    [Theory]
+    [MemberData(nameof(SharedConfigFlags))]
+    public void AJobThatReadsTheAppsConfig_IsCheckedAndMarkedLikeAnyOther(string template) => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Dump("r"));
+        var flags = SharedFlags(template);
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        var job = new TransferJob { Id = "s", Name = "shared", SourceRemote = "gone", ExtraFlags = flags };
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        var spec = new JobSpec { SourceRemote = "gone", ExtraArgs = RcloneMountService.SplitFlags(flags).ToList() };
+        var queued = queue.Enqueue(spec, "shared queued", "s");
+
+        var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, spec with { SourceRemote = "unsaved" }));
+
+        Assert.Contains("\"unsaved\" is not in", error.Message);
+        Assert.Equal("gone", job.DeletedRemote()); // the check read the list, so it marked
+        Assert.Equal(JobRunState.Cancelled, queued.State);
+        Assert.Contains("shared", Assert.Single(log, e => e.Level == ActivityLevel.Warn).Message);
+    });
+
+    // The app cannot read the config, but the job brings its own way in: rclone decides, nothing is marked.
+    [Theory]
+    [MemberData(nameof(SharedConfigFlags))]
+    public void AJobThatReadsTheAppsConfig_RunsWhenTheAppCannotReadIt(string template) => Sta(() =>
+    {
+        var (form, log) = RemoteShell("", "unable to decrypt configuration");
+        Set(form, "unlockingConfig", true); // as if the password box were already up: none is shown here
+        var flags = SharedFlags(template);
+        var job = new TransferJob { Id = "s", SourceRemote = "gone", ExtraFlags = flags };
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        var spec = new JobSpec { SourceRemote = "gone", ExtraArgs = RcloneMountService.SplitFlags(flags).ToList() };
+
+        RunCheck(form, spec);
+        Call(form, "RefreshRemotesAsync");
+        Set(form, "configService", null!); // no rclone either: the run itself will say so
+        RunCheck(form, spec);
+
+        Assert.Equal("gone", job.SourceRemote);
+        Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
+    });
+
+    [Theory]
+    [InlineData("--config other.conf")]
+    [InlineData("--config=")]
+    [InlineData("--config \"{0}\" --config other.conf")]
+    public void AJobWhoseConfigIsAnotherFile_IsLeftToRclone(string template) => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Dump("r"));
+        var flags = SharedFlags(template);
+        var job = new TransferJob { Id = "o", SourceRemote = "gone", ExtraFlags = flags };
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+
+        RunCheck(form, new JobSpec { SourceRemote = "gone", ExtraArgs = RcloneMountService.SplitFlags(flags).ToList() });
+        Call(form, "RefreshRemotesAsync");
+
+        Assert.Equal("gone", job.SourceRemote);
+        Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
     });
 
     // A kill that fails is said, and the caller is still not held by the process that stayed.
@@ -1013,8 +1090,6 @@ public class UiTextTests
         RunCheck(form, new JobSpec { SourcePath = @"C:\a", DestPath = @"C:\b" });
         RunCheck(form, new JobSpec { SourceRemote = ":local", DestRemote = RcloneRemote.MarkDeleted("x") });
         RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--config", "other.conf" } });
-        RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--password-command", "cmd /c echo x" } });
-        RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--password-command=x" } });
         WithEnvironment("RCLONE_CONFIG_FROM-ENV_TYPE", "local",
             () => RunCheck(form, new JobSpec { SourceRemote = "From-Env", DestRemote = "from-env,opt=1" }));
     });

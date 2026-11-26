@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -513,13 +514,13 @@ namespace RcloneMount
 
         // After a delete, nothing that named the remote may reach a later one of the same name: jobs,
         // queued runs and open windows keep a "deleted" mark until the user picks a remote again.
-        private Task ApplyRemoteDeletedAsync(string name) => ApplyRemoteGoneAsync(name, spareOwnConfig: false);
+        private Task ApplyRemoteDeletedAsync(string name) => ApplyRemoteGoneAsync(name, spareOtherConfig: false);
 
-        // spareOwnConfig: the name left the app's configuration by other hands, which says nothing about jobs,
-        // runs and windows with their own --config or --password-command. An in-app delete takes them all.
-        private async Task ApplyRemoteGoneAsync(string name, bool spareOwnConfig)
+        // spareOtherConfig: the name left the app's configuration by other hands, which says nothing about jobs,
+        // runs and windows whose --config names another file. An in-app delete takes them all.
+        private async Task ApplyRemoteGoneAsync(string name, bool spareOtherConfig)
         {
-            bool Affects(IEnumerable<string> flags) => !(spareOwnConfig && RcloneRemote.UsesOwnConfig(flags));
+            bool Affects(IEnumerable<string> flags) => !(spareOtherConfig && UsesOtherConfig(flags));
             var mark = RcloneRemote.MarkDeleted(name);
             var users = RepointJobs(name, mark, job => Affects(FlagsOf(job)));
             foreach (var job in users)
@@ -585,17 +586,31 @@ namespace RcloneMount
             }
         }
 
-        private static bool UsesOwnConfig(TransferJob job) => RcloneRemote.UsesOwnConfig(FlagsOf(job));
+        // True when --config points rclone at a file other than the one the app reads, so the app's list says
+        // nothing about it. --password-command alone opens that same file.
+        private static bool UsesOtherConfig(IEnumerable<string> flags)
+        {
+            if (RcloneRemote.ConfigFlag(flags) is not { } file) return false;
+            try
+            {
+                return !string.Equals(Path.GetFullPath(file), Path.GetFullPath(SettingsService.ResolveRcloneConfigPath()),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException)
+            {
+                return true; // no usable path, e.g. "--config="
+            }
+        }
 
         private static IEnumerable<string> FlagsOf(TransferJob job) => RcloneMountService.SplitFlags(job.ExtraFlags ?? "");
 
         // For remotes renamed or deleted outside the app: jobs naming one that `read` no longer has are
-        // marked as an in-app delete marks them. Jobs with their own --config or --password-command never are.
+        // marked as an in-app delete marks them. Jobs whose --config names another file never are.
         private async Task MarkMissingRemotesAsync(IReadOnlyList<RcloneRemote> read)
         {
             // No remotes at all is more likely a missing or wrong config file: runs are refused, jobs kept.
             if (read.Count == 0) return;
-            var judged = jobs.Where(j => !UsesOwnConfig(j)).ToList();
+            var judged = jobs.Where(j => !UsesOtherConfig(FlagsOf(j))).ToList();
             var gone = judged.SelectMany(j => new[] { j.SourceRemote, j.DestRemote })
                 .Where(name => RcloneRemote.IsMissing(name, read)).Distinct(StringComparer.Ordinal).ToList();
             if (gone.Count == 0) return;
@@ -606,7 +621,7 @@ namespace RcloneMount
             var message = $"No longer in rclone's configuration, so these saved jobs are stopped: {string.Join(", ", stopped)}. "
                 + "Edit each job and pick a remote.";
             // Every job is marked before the first await, so an overlapping check finds nothing to report.
-            var marking = gone.Select(name => ApplyRemoteGoneAsync(name, spareOwnConfig: true)).ToList();
+            var marking = gone.Select(name => ApplyRemoteGoneAsync(name, spareOtherConfig: true)).ToList();
             activityLog.Warn(message);
             Notify("Saved jobs stopped", message, ToolTipIcon.Warning, 8000);
             await Task.WhenAll(marking);
@@ -615,7 +630,7 @@ namespace RcloneMount
         // Why `read` does not allow this run: a remote it names, or one behind a wrapper it names, is not there.
         private static (string Reason, bool ViaWrapper)? Refusal(JobSpec spec, IReadOnlyList<RcloneRemote> read)
         {
-            if (RcloneRemote.UsesOwnConfig(spec.ExtraArgs)) return null;
+            if (UsesOtherConfig(spec.ExtraArgs)) return null;
             var sides = new[] { spec.SourceRemote, spec.DestRemote };
             if (sides.FirstOrDefault(name => RcloneRemote.IsMissing(name, read)) is { } missing)
                 return ($"Not run: remote \"{missing}\" is not in rclone's configuration.", false);
@@ -644,6 +659,8 @@ namespace RcloneMount
             }
             catch (Exception ex)
             {
+                // Its own password command or --config may open what the app cannot: rclone decides.
+                if (RcloneRemote.BringsConfigAccess(run.Spec.ExtraArgs)) return;
                 throw new InvalidOperationException("Not run: the remotes could not be checked. "
                     + (RcloneConfigPassword.IsPasswordError(ex.Message) ? RcloneConfigPassword.RefreshHint : ex.Message), ex);
             }

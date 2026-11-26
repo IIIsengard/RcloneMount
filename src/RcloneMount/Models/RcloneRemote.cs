@@ -49,10 +49,19 @@ namespace RcloneMount.Models
                 .Where(name => name.Length > 0 && !remotes.Any(r => r.Name == name))
                 .Select(FromEnvironment).OfType<RcloneRemote>()).ToArray();
 
-        // Extra flags that give rclone its own config file or password: the app's own read says nothing
-        // about such a run.
-        internal static bool UsesOwnConfig(IEnumerable<string> flags) =>
+        // Extra flags that give rclone its own way into a config: such a run may work when the app cannot read it.
+        internal static bool BringsConfigAccess(IEnumerable<string> flags) =>
             flags.Any(f => f.Split('=')[0] is "--config" or "--password-command");
+
+        // The file the --config flag names (rclone takes the last one; "" when it names none); null without the flag.
+        internal static string? ConfigFlag(IEnumerable<string> flags)
+        {
+            var all = flags.ToList();
+            var i = all.FindLastIndex(f => f.Split('=')[0] == "--config");
+            if (i < 0) return null;
+            if (all[i].Contains('=')) return all[i][(all[i].IndexOf('=') + 1)..];
+            return i + 1 < all.Count ? all[i + 1] : "";
+        }
 
         // The same list, in the same order, with one remote under its new name.
         internal static RcloneRemote[] Renamed(IEnumerable<RcloneRemote> remotes, string oldName, string newName) =>

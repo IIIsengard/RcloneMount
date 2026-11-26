@@ -42,9 +42,12 @@ public class JobServiceIntegrationTests
             DryRun = true,
         };
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // Only a guard against hanging, well past what a loaded PC needs. When it fires, rclone is told
+        // to quit and exits 0 with nothing reported.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         var result = await new RcloneJobService(exe).RunAsync(spec, new Progress<JobProgress>(), timeout.Token);
 
+        Assert.False(timeout.IsCancellationRequested, "rclone did not exit on its own");
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(2, result.DryRunActions!.Count);
     }
