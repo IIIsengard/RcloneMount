@@ -311,56 +311,51 @@ namespace RcloneMount.Services
         // Zip the CURRENT settings.json (and rclone.conf if we can find it) into backups/
         // before overwriting. Filename is timestamped so the ring is naturally sorted.
         // The zip layout is a flat archive with two entries: "settings.json" and
-        // "rclone.conf" (omitted if not found).
+        // "rclone.conf" (omitted if not found). Throws when the backup cannot be written; the
+        // activity log and transfer totals are best-effort.
         private static void BackupCurrentFile()
         {
-            try
+            if (!File.Exists(SettingsFilePath))
+                throw new FileNotFoundException("There are no saved settings to back up.", SettingsFilePath);
+            if (!Directory.Exists(BackupsFolder))
+                Directory.CreateDirectory(BackupsFolder);
+            var ts = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+            var dest = Path.Combine(BackupsFolder, $"{BackupPrefix}{ts}.zip");
+            var i = 1;
+            while (File.Exists(dest))
             {
-                if (!File.Exists(SettingsFilePath)) return;
-                if (!Directory.Exists(BackupsFolder))
-                    Directory.CreateDirectory(BackupsFolder);
-                var ts = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
-                var dest = Path.Combine(BackupsFolder, $"{BackupPrefix}{ts}.zip");
-                var i = 1;
-                while (File.Exists(dest))
-                {
-                    dest = Path.Combine(BackupsFolder, $"{BackupPrefix}{ts}_{i++}.zip");
-                    if (i > 99) break;
-                }
+                dest = Path.Combine(BackupsFolder, $"{BackupPrefix}{ts}_{i++}.zip");
+                if (i > 99) break;
+            }
 
-                using var zip = ZipFile.Open(dest, ZipArchiveMode.Create);
-                zip.CreateEntryFromFile(SettingsFilePath, "settings.json", CompressionLevel.Optimal);
-                var rclone = ResolveRcloneConfigPath();
-                if (File.Exists(rclone))
-                    zip.CreateEntryFromFile(rclone, "rclone.conf", CompressionLevel.Optimal);
-                // The activity log may be being written to right now — open with shared read
-                // instead of using CreateEntryFromFile (which takes an exclusive handle).
-                if (File.Exists(ActivityLogPath))
+            using var zip = ZipFile.Open(dest, ZipArchiveMode.Create);
+            zip.CreateEntryFromFile(SettingsFilePath, "settings.json", CompressionLevel.Optimal);
+            var rclone = ResolveRcloneConfigPath();
+            if (File.Exists(rclone))
+                zip.CreateEntryFromFile(rclone, "rclone.conf", CompressionLevel.Optimal);
+            // The activity log may be being written to right now — open with shared read
+            // instead of using CreateEntryFromFile (which takes an exclusive handle).
+            if (File.Exists(ActivityLogPath))
+            {
+                try
                 {
-                    try
-                    {
-                        var entry = zip.CreateEntry("activity.log", CompressionLevel.Optimal);
-                        using var src = new FileStream(ActivityLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        using var dst = entry.Open();
-                        src.CopyTo(dst);
-                    }
-                    catch
-                    {
-                        // Log couldn't be read — proceed without it.
-                    }
+                    var entry = zip.CreateEntry("activity.log", CompressionLevel.Optimal);
+                    using var src = new FileStream(ActivityLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var dst = entry.Open();
+                    src.CopyTo(dst);
                 }
-                if (File.Exists(TransferTotalsService.FilePath))
+                catch
                 {
-                    try
-                    {
-                        zip.CreateEntryFromFile(TransferTotalsService.FilePath, "transfer-totals.json", CompressionLevel.Optimal);
-                    }
-                    catch { }
+                    // Log couldn't be read — proceed without it.
                 }
             }
-            catch
+            if (File.Exists(TransferTotalsService.FilePath))
             {
-                // best-effort — never fail a save because backup broke
+                try
+                {
+                    zip.CreateEntryFromFile(TransferTotalsService.FilePath, "transfer-totals.json", CompressionLevel.Optimal);
+                }
+                catch { }
             }
         }
 
@@ -479,7 +474,15 @@ namespace RcloneMount.Services
             }
 
             if (File.Exists(SettingsFilePath))
-                BackupCurrentFile();
+            {
+                // The user is promised an undo, so no backup means no restore.
+                try { BackupCurrentFile(); }
+                catch (Exception ex)
+                {
+                    throw new IOException(
+                        $"Your current settings could not be backed up first, so nothing was restored. {ex.Message}", ex);
+                }
+            }
 
             ReplaceAll(files);
 

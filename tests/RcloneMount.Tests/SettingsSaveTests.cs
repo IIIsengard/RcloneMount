@@ -393,6 +393,62 @@ public class SettingsSaveTests
         Assert.Equal("Dark", Saved().ThemePreference);
     }
 
+    [Fact]
+    public async Task BackupNow_FailsWhenTheBackupCannotBeWritten_ButSavingCarriesOn()
+    {
+        try
+        {
+            await SettingsService.SaveAsync(new AppSettings { BackupsFolderOverride = AFile() });
+            await SettingsService.SaveAsync(new AppSettings { BackupsFolderOverride = AFile(), ThemePreference = "Dark" });
+
+            Assert.Equal("Dark", Saved().ThemePreference); // the failed automatic backup did not stop the save
+            Assert.ThrowsAny<IOException>(SettingsService.ForceBackup);
+        }
+        finally { await SettingsService.SaveAsync(new AppSettings()); }
+    }
+
+    [Fact]
+    public void BackupNow_FailsWhenThereAreNoSettingsToBackUp()
+    {
+        var good = SettingsService.PathOverride!;
+        try
+        {
+            SettingsService.PathOverride = Path.Combine(TestIsolation.Dir, "empty", "settings.json");
+
+            Assert.Throws<FileNotFoundException>(SettingsService.ForceBackup);
+        }
+        finally { SettingsService.PathOverride = good; }
+    }
+
+    [Fact]
+    public async Task Restore_IsRefusedWhenTheCurrentSettingsCannotBeBackedUp()
+    {
+        var backup = await BackupOf(new AppSettings { ThemePreference = "Light" });
+        try
+        {
+            await SettingsService.SaveAsync(new AppSettings { BackupsFolderOverride = AFile(), ThemePreference = "Dark" });
+
+            var ex = Assert.Throws<IOException>(() => SettingsService.RestoreFromBackup(backup));
+
+            Assert.Contains("nothing was restored", ex.Message);
+            Assert.Equal("Dark", Saved().ThemePreference);
+            Assert.False(SettingsService.Restored);
+        }
+        finally
+        {
+            ResetRestored();
+            await SettingsService.SaveAsync(new AppSettings());
+        }
+    }
+
+    // A path that cannot be used as a folder.
+    private static string AFile()
+    {
+        var file = Path.Combine(TestIsolation.Dir, "a-file-not-a-folder");
+        File.WriteAllText(file, "");
+        return file;
+    }
+
     // SemaphoreSlim promises no FIFO order, so write two snapshots newest first.
     [Fact]
     public async Task OlderSnapshotWrittenLast_DoesNotOverwriteTheNewerOne()

@@ -121,13 +121,18 @@ namespace RcloneMount
                 return new CliRelay.Response(5, "Mount service not initialised.");
 
             if (!mountService.IsMounted(found))
+            {
+                CancelRetry(found.Id); // a dropped drive waiting to be remounted would come back
                 return new CliRelay.Response(0, $"'{found.RemoteName}' is not mounted.");
+            }
 
             // No one to ask from a script: refuse instead of cutting the uploads off.
             // shortcut: no --force, so a script cannot override this; add one if users ask for it.
             if (!await UploadsGuardAsync(new[] { found }, "Unmount", interactive: false))
                 return new CliRelay.Response(6,
                     $"'{found.RemoteName}' at {found.DriveLetter} still has uploads pending. Try again when they finish, or unmount it in the app.");
+
+            CancelRetry(found.Id);
 
             try
             {

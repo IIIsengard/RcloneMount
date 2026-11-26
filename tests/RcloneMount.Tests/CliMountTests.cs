@@ -89,6 +89,37 @@ public class CliMountTests
         AssertBackOnConfiguredLetter(rig, letter);
     }
 
+    // C: stands for the configured letter something else holds, the reason for the fallback.
+    [Fact]
+    public async Task Unmount_OfAFallbackMount_ChecksTheLetterItWasOn()
+    {
+        var letter = UnusedLetter();
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = letter });
+        using var service = rig.Service;
+        rig.Configured[rig.Mount!.Id] = "C:";
+
+        var result = await Invoke<Task<(string Letter, bool StillMounted)>>(rig.Form, "StopMountAsync", rig.Mount);
+
+        Assert.Equal((letter, false), result);
+        AssertBackOnConfiguredLetter(rig, "C:");
+    }
+
+    // A dropped drive waiting to be remounted would otherwise come back after the script unmounted it.
+    [Fact]
+    public async Task CliUnmount_CancelsAPendingRemount()
+    {
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = UnusedLetter() });
+        using var service = rig.Service;
+        var retry = new CancellationTokenSource();
+        var token = retry.Token;
+        ((Dictionary<string, CancellationTokenSource>)Field("retryCts").GetValue(rig.Form)!)[rig.Mount!.Id] = retry;
+
+        var reply = await Invoke<Task<CliRelay.Response>>(rig.Form, "CliUnmountAsync", "r");
+
+        Assert.Equal(0, reply.ExitCode);
+        Assert.True(token.IsCancellationRequested);
+    }
+
     private sealed record Rig(MainForm Form, Mount? Mount, List<Mount> Mounts, RcloneMountService Service,
         Dictionary<string, string> Configured, List<(string Message, int Thread)> Logged);
 

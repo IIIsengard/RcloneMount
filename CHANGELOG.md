@@ -48,6 +48,11 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **Transfer totals keep counting** after restoring a backup that does not include them.
 - **Mounting from the tray picks another drive letter when yours is taken.**
 - **A mount that fails to start shows your chosen drive letter again**, not the substitute.
+- **Unmounting a drive that used a substitute letter** no longer claims another rclone still
+  holds it, and Explorer is told about the right letter.
+- **`--unmount` also stops a pending remount**, so the drive does not come back.
+- **"Backup now" reports when no backup could be written**, and a restore does not start if
+  your current settings cannot be backed up first.
 - **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
   jobs started by hand stayed on "never run".
 - **Saving a new job twice no longer creates a duplicate.**

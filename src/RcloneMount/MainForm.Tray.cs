@@ -139,9 +139,8 @@ namespace RcloneMount
             if (!await UploadsGuardAsync(new[] { m }, "Unmount", interactive: true)) return;
             try
             {
-                await mountService.UnmountAsync(m);
-                ShellNotifier.DriveRemoved(m.DriveLetter);
-                NotifyMountDown(m);
+                var (live, _) = await StopMountAsync(m);
+                NotifyMountDown(m, live);
                 RefreshMountList();
             }
             catch (Exception ex)
