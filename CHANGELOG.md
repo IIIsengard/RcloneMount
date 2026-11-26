@@ -32,6 +32,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
+  jobs started by hand stayed on "never run".
+- **Saving a new job twice no longer creates a duplicate.**
 - **`&` shows in names and headings.** "US & Canada" and "Startup & Updates" lost the `&`.
 - **Local paths in job rows** no longer start with a stray `:`.
 - **Layout:** the server-side transfer checkbox is no longer cut off (shorter label), the

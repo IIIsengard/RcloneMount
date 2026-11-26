@@ -101,6 +101,8 @@ namespace RcloneMount
             tabJobs.Controls.Add(grid);
 
             RefreshJobsList();
+            // "last run 5m ago" is computed when a row is bound, so rebind each time the tab opens.
+            tabJobs.VisibleChanged += (_, _) => { if (tabJobs.Visible) RefreshJobsList(); };
         }
 
         private void BuildTransfersTab(Panel tabTransfers)
@@ -330,6 +332,7 @@ namespace RcloneMount
                 {
                     RefreshActiveList();
                     NotifyNewFailures();
+                    SaveLastRuns();
                     UpdatePowerGuard();
                 }));
             }
@@ -350,6 +353,14 @@ namespace RcloneMount
                 if (why.Length > 150) why = why[..150] + "…";
                 Notify("Transfer job failed", $"{run.DisplayName}: {why}", ToolTipIcon.Error, 8000);
             }
+        }
+
+        private readonly HashSet<string> lastRunRecorded = new(StringComparer.Ordinal);
+        private void SaveLastRuns()
+        {
+            if (jobQueue is null || !RecordLastRuns(jobs, jobQueue.Snapshot(), lastRunRecorded)) return;
+            _ = SaveSettingsAsync();
+            RefreshJobsList();
         }
 
         // After a job ends, make any mount of the remote it wrote to re-list that folder
@@ -580,6 +591,25 @@ namespace RcloneMount
             UpsertInto(jobs, incoming);
             _ = SaveSettingsAsync();
             RefreshJobsList();
+        }
+
+        // Copies each finished run's time and outcome onto its saved job, once per run. Covers manual,
+        // retried and scheduled runs; InFlight stays with the scheduler (CompleteRun).
+        internal static bool RecordLastRuns(List<TransferJob> jobs, IReadOnlyList<Models.JobRun> runs, HashSet<string> seen)
+        {
+            var changed = false;
+            foreach (var run in runs)
+            {
+                // No StartedUtc: removed from the queue before it ran.
+                if (!run.IsTerminal || run.StartedUtc is null || run.FinishedUtc is not { } done) continue;
+                if (run.Outcome is not { } outcome || !seen.Add(run.Id)) continue;
+                var job = jobs.Find(j => j.Id == run.JobId);
+                if (job is null || job.LastRunUtc >= done) continue;
+                job.LastRunUtc = done;
+                job.LastResultKind = outcome;
+                changed = true;
+            }
+            return changed;
         }
 
         internal static void UpsertInto(List<TransferJob> jobs, TransferJob incoming)

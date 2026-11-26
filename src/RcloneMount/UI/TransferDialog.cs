@@ -63,7 +63,7 @@ namespace RcloneMount.UI
         // Optional identity carried over when the dialog was opened from an existing
         // saved job — used so Save updates the same record instead of creating a
         // duplicate, and so the enqueued run reports back with the right JobId.
-        private readonly string? editingJobId;
+        private string? editingJobId;
 
         public TransferDialog(
             IReadOnlyList<RcloneRemote> remotes,
@@ -525,6 +525,7 @@ namespace RcloneMount.UI
                 FilterMaxAge = filters.MaxAge,
             };
             saveCallback(job);
+            editingJobId = job.Id; // a second Save updates this job, and Start reports back to it
             btnSave.Text = "Saved";
             var reenable = new System.Windows.Forms.Timer { Interval = 1200 };
             reenable.Tick += (_, _) =>

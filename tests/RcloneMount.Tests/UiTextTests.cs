@@ -143,6 +143,27 @@ public class UiTextTests
         Assert.All(boxes, b => Assert.True(b.Left + b.PreferredSize.Width <= dialog.ClientSize.Width - 16, b.Text));
     });
 
+    // A new job saved from the dialog must stay one job, and Start must report back to it.
+    [Fact]
+    public void TransferDialog_NewJobSavedThenStarted_KeepsOneId() => Sta(() =>
+    {
+        var saved = new List<string>();
+        var started = new List<string>();
+        using var dialog = new TransferDialog(new[] { new RcloneRemote { Name = "r", Type = "mega" } },
+            (_, _, id) => started.Add(id), "r", "", saveCallback: job => saved.Add(job.Id));
+        object? Of(string field) => typeof(TransferDialog).GetField(field, Private)!.GetValue(dialog);
+        ((TextBox)Of("txtName")!).Text = "nightly";
+        void Invoke(string name, params object[] args) => typeof(TransferDialog).GetMethod(name, Private)!.Invoke(dialog, args);
+
+        Invoke("SaveJob");
+        Invoke("SaveJob");
+        Invoke("StartAndClose", false); // dry-run is ticked by default, so no confirm box
+
+        Assert.Equal(2, saved.Count);
+        Assert.Equal(saved[0], saved[1]);
+        Assert.Equal(new[] { saved[0] }, started);
+    });
+
     [Fact]
     public void HistoryItems_AreAnnouncedWithNameDirectionSizeAndTime() => Sta(() =>
     {

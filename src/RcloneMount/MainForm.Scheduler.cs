@@ -109,7 +109,7 @@ namespace RcloneMount
                     try
                     {
                         scheduledInFlight.Remove(job.Id);
-                        CompleteRun(jobs, job, run.Outcome ?? "Unknown", DateTime.UtcNow);
+                        CompleteRun(jobs, job, run.Outcome ?? "Unknown", run.FinishedUtc ?? DateTime.UtcNow);
                         if (run.State == JobRunState.Failed)
                             activityLog.Warn($"Scheduled job '{job.Name}' failed: {run.LastError ?? run.Outcome}");
                         else if (run.State == JobRunState.Cancelled)
@@ -127,12 +127,13 @@ namespace RcloneMount
 
         // Record a finished run on the CURRENT saved job: the Edit dialog replaces the job object
         // while a run is in progress, so the captured one may no longer be in the list.
-        internal static TransferJob CompleteRun(List<TransferJob> jobs, TransferJob captured, string outcome, DateTime nowUtc)
+        internal static TransferJob CompleteRun(List<TransferJob> jobs, TransferJob captured, string outcome, DateTime finishedUtc)
         {
             var cur = jobs.Find(j => j.Id == captured.Id) ?? captured;
             cur.InFlight = false;
             cur.InFlightStartedUtc = null;
-            cur.LastRunUtc = nowUtc;
+            if (cur.LastRunUtc > finishedUtc) return cur; // a later run already reported
+            cur.LastRunUtc = finishedUtc;
             cur.LastResultKind = outcome;
             return cur;
         }
