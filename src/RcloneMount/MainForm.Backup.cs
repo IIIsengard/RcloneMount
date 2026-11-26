@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using RcloneMount.Models;
 using RcloneMount.Services;
 using RcloneMount.UI;
 
@@ -55,7 +58,7 @@ namespace RcloneMount
                 return;
             }
             backupsFolderOverride = chosen;
-            await SaveSettingsAsync();
+            if (!await SaveSettingsAsync()) return;
             RefreshBackupsList();
             SetStatus($"Backups folder set to {chosen}.");
         }
@@ -63,7 +66,7 @@ namespace RcloneMount
         private async Task ResetBackupsFolderAsync()
         {
             backupsFolderOverride = null;
-            await SaveSettingsAsync();
+            if (!await SaveSettingsAsync()) return;
             RefreshBackupsList();
             SetStatus("Backups folder reset to default.");
         }
@@ -74,7 +77,8 @@ namespace RcloneMount
         {
             try
             {
-                await SaveSettingsAsync();
+                if (!await SaveSettingsAsync())
+                    throw new InvalidOperationException("The current settings could not be saved. See the Log tab.");
                 SettingsService.ForceBackup();
                 RefreshBackupsList();
                 SetStatus("Backup created.");
@@ -82,6 +86,97 @@ namespace RcloneMount
             catch (Exception ex)
             {
                 MessageBox.Show($"Backup failed: {ex.Message}", "Backup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        internal static string RestoreWarning(string question, int activeTransfers) =>
+            $"{question}\n\n" +
+            "All mounts will be unmounted and RcloneMount will restart to apply the restored settings. " +
+            (activeTransfers > 0
+                ? $"{activeTransfers} running or queued transfer(s) will be cancelled. "
+                : "Any transfer running by then will be cancelled. ") +
+            "Close any rclone terminal or config window first, because it can change rclone.conf. " +
+            "Your current settings will be backed up first so this can be undone.";
+
+        private bool restoreRunning;
+
+        // Both restore buttons end here.
+        private async Task RestoreAndRestartAsync(string backupPath, string question)
+        {
+            if (restoreRunning) return;
+            var active = jobQueue?.Snapshot().Count(r => r.IsActive) ?? 0;
+            var ok = MessageBox.Show(RestoreWarning(question, active),
+                "Restore settings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (ok != DialogResult.Yes) return;
+
+            restoreRunning = true;
+            try
+            {
+                if (!await UploadsGuardAsync(mounts, "Restore", interactive: true)) return;
+                SetStatus("Stopping mounts and transfers before restore...");
+                await RestoreWithWritersStoppedAsync(
+                    () => SettingsService.RestoreFromBackup(backupPath), TimeSpan.FromSeconds(30));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Restore failed: {ex.Message}", "Restore error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            finally { restoreRunning = false; }
+
+            try
+            {
+                var exe = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exe))
+                    Process.Start(new ProcessStartInfo(exe, "--restarted") { UseShellExecute = true });
+            }
+            catch { }
+            exitFromTray = true;
+            Close();
+        }
+
+        // Stops everything that can write rclone.conf or settings, then runs `restore`. Throws,
+        // without restoring, when something will not stop. After success the schedule stays off,
+        // because the app restarts.
+        private async Task RestoreWithWritersStoppedAsync(Action restore, TimeSpan stopTimeout)
+        {
+            static void RefuseOpenTerminals()
+            {
+                if (RcloneConfigService.Terminals.Any(t => !t.HasExited))
+                    throw new InvalidOperationException(
+                        "An rclone terminal or config window is still open. Close it, then restore again.");
+            }
+
+            RefuseOpenTerminals();
+            var wasScheduling = schedulerTimer is not null;
+            StopScheduler();
+            CancelAllRetries();
+            try
+            {
+                var deadline = DateTime.UtcNow + stopTimeout;
+                while (true)
+                {
+                    if (mountService is not null) await mountService.UnmountAllAsync();
+                    var active = jobQueue?.Snapshot().Where(r => r.IsActive).ToList() ?? new List<JobRun>();
+                    var mounted = mountService is not null && mounts.Any(mountService.IsMounted);
+                    if (active.Count == 0 && !mounted) break;
+                    if (DateTime.UtcNow > deadline)
+                        throw new InvalidOperationException("Transfers or mounts are still running, so nothing was restored.");
+                    // Queued first, so cancelling a running one cannot start the next.
+                    foreach (var run in active.OrderBy(r => r.State == JobRunState.Running))
+                        jobQueue!.Cancel(run.Id);
+                    await Task.Delay(100);
+                }
+                // No await from the check above to the end of the restore: nothing can start in between.
+                RefuseOpenTerminals();
+                CancelAllRetries();
+                restore();
+            }
+            catch
+            {
+                if (wasScheduling) StartScheduler();
+                _ = KickAutoRemountsAsync("restore did not finish");
+                throw;
             }
         }
 
@@ -101,38 +196,7 @@ namespace RcloneMount
             };
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
-            var ok = MessageBox.Show(
-                $"Restore settings from:\n\n{dlg.FileName}\n\n" +
-                "All mounts will be unmounted and RcloneMount will restart to apply the restored settings. " +
-                "Your current settings will be backed up first so this can be undone.",
-                "Restore settings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (ok != DialogResult.Yes) return;
-            if (!await UploadsGuardAsync(mounts, "Restore", interactive: true)) return;
-
-            try
-            {
-                if (mountService is not null)
-                {
-                    SetStatus("Unmounting all before restore...");
-                    await mountService.UnmountAllAsync();
-                }
-                SettingsService.RestoreFromBackup(dlg.FileName);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Restore failed: {ex.Message}", "Restore error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            try
-            {
-                var exe = Environment.ProcessPath;
-                if (!string.IsNullOrEmpty(exe))
-                    Process.Start(new ProcessStartInfo(exe, "--restarted") { UseShellExecute = true });
-            }
-            catch { }
-            exitFromTray = true;
-            Close();
+            await RestoreAndRestartAsync(dlg.FileName, $"Restore settings from:\n\n{dlg.FileName}");
         }
 
         private async void RestoreSelectedBackup(ThemedDropDown combo)
@@ -142,38 +206,7 @@ namespace RcloneMount
             var chosen = backups[combo.SelectedIndex];
             var when = chosen.TimestampUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
 
-            var ok = MessageBox.Show(
-                $"Restore settings from {when}?\n\n" +
-                "All mounts will be unmounted and RcloneMount will restart to apply the restored settings. " +
-                "Your current settings will be backed up first so this can be undone.",
-                "Restore settings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (ok != DialogResult.Yes) return;
-            if (!await UploadsGuardAsync(mounts, "Restore", interactive: true)) return;
-
-            try
-            {
-                if (mountService is not null)
-                {
-                    SetStatus("Unmounting all before restore...");
-                    await mountService.UnmountAllAsync();
-                }
-                SettingsService.RestoreFromBackup(chosen.Path);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Restore failed: {ex.Message}", "Restore error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            try
-            {
-                var exe = Environment.ProcessPath;
-                if (!string.IsNullOrEmpty(exe))
-                    Process.Start(new ProcessStartInfo(exe, "--restarted") { UseShellExecute = true });
-            }
-            catch { }
-            exitFromTray = true;
-            Close();
+            await RestoreAndRestartAsync(chosen.Path, $"Restore settings from {when}?");
         }
     }
 }

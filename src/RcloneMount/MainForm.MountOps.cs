@@ -101,7 +101,7 @@ namespace RcloneMount
             try
             {
                 var requested = selected.DriveLetter;
-                if (!ResolveDriveLetterForMount(selected, out var chosen, out var wasFallback))
+                if (!await StartMountAsync(selected))
                 {
                     MessageBox.Show(
                         $"No free drive letters are available for {selected.RemoteName}. Free up a letter and try again.",
@@ -109,43 +109,66 @@ namespace RcloneMount
                     SetStatus("Mount aborted — no free drive letter.");
                     return;
                 }
-                if (wasFallback)
-                {
-                    activityLog.Info($"Drive {requested} was taken — falling back to {chosen} for {selected.RemoteName}.");
-                    SetStatus($"{requested} taken; using {chosen} for {selected.RemoteName}.");
-                }
+                // Kept: if rclone exits while we wait, the mount goes back to its configured letter.
+                var live = selected.DriveLetter;
+                var wasFallback = !string.Equals(live, requested, StringComparison.OrdinalIgnoreCase);
+                if (wasFallback) SetStatus($"{requested} taken; using {live} for {selected.RemoteName}.");
 
-                SetStatus($"Mounting {selected.DriveLetter}...");
-                await mountService.MountAsync(selected);
+                SetStatus($"Mounting {live}...");
                 RefreshMountList();
 
-                var ready = await WaitForDriveReadyAsync(selected.DriveLetter, TimeSpan.FromSeconds(15));
+                var ready = await WaitForDriveReadyAsync(live, TimeSpan.FromSeconds(15));
                 RefreshMountList();
                 if (ready)
                 {
-                    ShellNotifier.DriveAdded(selected.DriveLetter);
+                    ShellNotifier.DriveAdded(live);
                     if (wasFallback)
                     {
-                        SetStatus($"Mounted {selected.RemoteName} at {selected.DriveLetter} (fallback from {requested}).");
+                        SetStatus($"Mounted {selected.RemoteName} at {live} (fallback from {requested}).");
                         Notify("Drive letter changed",
-                            $"{requested} was in use — {selected.RemoteName} is now on {selected.DriveLetter}.",
+                            $"{requested} was in use — {selected.RemoteName} is now on {live}.",
                             ToolTipIcon.Warning, 4000);
                     }
                     else
                     {
-                        SetStatus($"Mounted {selected.RemoteName} at {selected.DriveLetter}.");
+                        SetStatus($"Mounted {selected.RemoteName} at {live}.");
                     }
                     NotifyMountUp(selected);
                 }
                 else
                 {
-                    SetStatus($"rclone launched, but {selected.DriveLetter} did not become ready within 15s. Check log for errors.");
+                    SetStatus($"rclone launched, but {live} did not become ready within 15s. Check log for errors.");
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Mount failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 SetStatusError("Mount failed.", ex);
+            }
+        }
+
+        // A mount started by hand (button, tray, --mount): picks the drive letter, falling back to a
+        // free one when the configured letter is taken, then starts rclone. False: no letter is free
+        // and nothing was started. Call on the UI thread with mountService set.
+        private async Task<bool> StartMountAsync(Mount m)
+        {
+            if (mountService!.IsMounted(m)) return true; // picking again would move a live mount's letter
+            var requested = m.DriveLetter;
+            if (!ResolveDriveLetterForMount(m, out var chosen, out var wasFallback)) return false;
+            if (wasFallback)
+                activityLog.Info($"Drive {requested} was taken — falling back to {chosen} for {m.RemoteName}.");
+            await StartRcloneAsync(m);
+            return true;
+        }
+
+        // Every mount path starts rclone here: a failed start puts the configured letter back.
+        private async Task StartRcloneAsync(Mount m)
+        {
+            try { await mountService!.MountAsync(m); }
+            catch
+            {
+                RestoreConfiguredDriveLetter(m);
+                throw;
             }
         }
 
@@ -200,6 +223,20 @@ namespace RcloneMount
             return UploadsGuard.Sum(await Task.WhenAll(ports.Select(p => RcloneStatsPoller.FetchUploadsPendingAsync(p))));
         }
 
+        // Unmounts and tells Explorer. Letter is the one the drive was on, taken first: by the time
+        // rclone has gone, MountExited may already have put the configured letter back, and that one
+        // is usually held by whatever caused the fallback.
+        private async Task<(string Letter, bool StillMounted)> StopMountAsync(Mount m)
+        {
+            var live = m.DriveLetter;
+            await mountService!.UnmountAsync(m);
+            ShellNotifier.DriveRemoved(live);
+            // If this mount was on a session-fallback letter, revert to the user's
+            // configured letter now the drive is gone so the row shows their intent.
+            RestoreConfiguredDriveLetter(m);
+            return (live, RcloneMountService.IsDriveMountedExternally(live));
+        }
+
         private async Task UnmountAsync(Mount selected)
         {
             if (mountService is null) return;
@@ -210,29 +247,25 @@ namespace RcloneMount
             try
             {
                 SetStatus($"Unmounting {selected.DriveLetter}...");
-                await mountService.UnmountAsync(selected);
-                ShellNotifier.DriveRemoved(selected.DriveLetter);
-                // If this mount was on a session-fallback letter, revert to the user's
-                // configured letter now the drive is gone so the row shows their intent.
-                RestoreConfiguredDriveLetter(selected);
+                var (live, stillMounted) = await StopMountAsync(selected);
 
-                if (RcloneMountService.IsDriveMountedExternally(selected.DriveLetter))
+                if (stillMounted)
                 {
                     var choice = MessageBox.Show(
-                        $"{selected.DriveLetter} is still mounted by another rclone process (not started by this app).\n\nKill it now?",
+                        $"{live} is still mounted by another rclone process (not started by this app).\n\nKill it now?",
                         "External mount", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                     if (choice == DialogResult.Yes)
                     {
-                        var killed = await RcloneMountService.KillExternalRcloneMountAsync(selected.DriveLetter);
+                        var killed = await RcloneMountService.KillExternalRcloneMountAsync(live);
                         SetStatus(killed > 0
-                            ? $"Killed {killed} external rclone process(es) on {selected.DriveLetter}."
-                            : $"No matching external rclone process found for {selected.DriveLetter}.");
+                            ? $"Killed {killed} external rclone process(es) on {live}."
+                            : $"No matching external rclone process found for {live}.");
                     }
                 }
                 else
                 {
-                    SetStatus($"Unmounted {selected.DriveLetter}.");
-                    NotifyMountDown(selected);
+                    SetStatus($"Unmounted {live}.");
+                    NotifyMountDown(selected, live);
                 }
                 RefreshMountList();
             }
@@ -410,7 +443,7 @@ namespace RcloneMount
                     if (IsHandleCreated) BeginInvoke(new Action(() =>
                         SetStatus($"Auto-remount {mount.RemoteName} → {mount.DriveLetter} (attempt {attempt})...")));
 
-                    await mountService.MountAsync(mount);
+                    await StartRcloneAsync(mount);
                     if (await WaitForDriveReadyAsync(mount.DriveLetter, TimeSpan.FromSeconds(15)))
                     {
                         ShellNotifier.DriveAdded(mount.DriveLetter);
@@ -438,8 +471,8 @@ namespace RcloneMount
         private void NotifyMountUp(Mount m) =>
             Notify("Drive mounted", $"{m.RemoteName} is available at {m.DriveLetter}.", ToolTipIcon.Info);
 
-        private void NotifyMountDown(Mount m) =>
-            Notify("Drive unmounted", $"{m.DriveLetter} ({m.RemoteName}) is no longer mounted.", ToolTipIcon.Info);
+        private void NotifyMountDown(Mount m, string letter) =>
+            Notify("Drive unmounted", $"{letter} ({m.RemoteName}) is no longer mounted.", ToolTipIcon.Info);
 
         // Slice 1 of the transfer engine — opens a modeless dialog with source
         // pre-filled from the mount. No persistence, no scheduling; the user picks

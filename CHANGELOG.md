@@ -32,6 +32,27 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **Changes made in quick succession are saved correctly.** When two saves overlapped, the
+  settings file could get half-finished changes or the save could fail, and a mount running
+  on a temporary drive letter could show the wrong letter.
+- **Restoring a backup stays restored.** The closing app could write its old settings or
+  transfer totals back over the restored files before restarting.
+- **"Backup now" no longer collides with a save in progress.**
+- **`--mount` picks another drive letter when yours is taken**, like the Mount button does.
+- **You are told when settings cannot be saved.** The failure appears in the log and as a
+  tray notice, once until saving works again.
+- **Restore stops transfers and mounts first.** It tells you they will be cancelled, and
+  does not start while an rclone terminal opened from the app is still open.
+- **A restore that fails changes nothing.** A damaged backup, or a file that cannot be
+  replaced, leaves your settings and rclone.conf as they were.
+- **Transfer totals keep counting** after restoring a backup that does not include them.
+- **Mounting from the tray picks another drive letter when yours is taken.**
+- **A mount that fails to start shows your chosen drive letter again**, not the substitute.
+- **Unmounting a drive that used a substitute letter** no longer claims another rclone still
+  holds it, and Explorer is told about the right letter.
+- **`--unmount` also stops a pending remount**, so the drive does not come back.
+- **"Backup now" reports when no backup could be written**, and a restore does not start if
+  your current settings cannot be backed up first.
 - **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
   jobs started by hand stayed on "never run".
 - **"Last run" only counts runs of the job as saved.** Starting a saved job after changing

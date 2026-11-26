@@ -159,6 +159,9 @@ namespace RcloneMount.Services
                 .Select(l => l.Split('=', 2))
                 .FirstOrDefault(kv => kv.Length == 2 && kv[0].Trim() == "type")?[1].Trim() ?? "";
 
+        // Terminals opened this run. A restore refuses while one is open: it can rewrite rclone.conf.
+        internal static List<Process> Terminals { get; } = new();
+
         // Console where any rclone command works (config, ncdu, …) against the same rclone.exe
         // and rclone.conf the app uses. UseShellExecute=false so the Environment edits apply.
         public void LaunchTerminal(string? args = null)
@@ -176,7 +179,7 @@ namespace RcloneMount.Services
             psi.Environment["PATH"] = Path.GetDirectoryName(exePath) + ";" + psi.Environment["PATH"];
             psi.Environment["RCLONE_CONFIG"] = SettingsService.ResolveRcloneConfigPath();
             RcloneConfigPassword.AddTo(psi);
-            Process.Start(psi);
+            if (Process.Start(psi) is { } terminal) Terminals.Add(terminal);
         }
 
         public async Task<IReadOnlyList<RcloneProvider>> ListProvidersAsync()

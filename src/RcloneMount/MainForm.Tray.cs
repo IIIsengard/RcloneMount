@@ -111,12 +111,18 @@ namespace RcloneMount
         {
             if (mountService is null || winFspInfo is null) return;
             if (!remotes.Any(r => r.Name == m.RemoteName)) return;
+            CancelRetry(m.Id);
             try
             {
-                await mountService.MountAsync(m);
-                if (await WaitForDriveReadyAsync(m.DriveLetter, TimeSpan.FromSeconds(15)))
+                if (!await StartMountAsync(m))
                 {
-                    ShellNotifier.DriveAdded(m.DriveLetter);
+                    Notify("Mount failed", $"No free drive letters are available for {m.RemoteName}.", ToolTipIcon.Error);
+                    return;
+                }
+                var live = m.DriveLetter;
+                if (await WaitForDriveReadyAsync(live, TimeSpan.FromSeconds(15)))
+                {
+                    ShellNotifier.DriveAdded(live);
                     NotifyMountUp(m);
                 }
                 RefreshMountList();
@@ -133,9 +139,8 @@ namespace RcloneMount
             if (!await UploadsGuardAsync(new[] { m }, "Unmount", interactive: true)) return;
             try
             {
-                await mountService.UnmountAsync(m);
-                ShellNotifier.DriveRemoved(m.DriveLetter);
-                NotifyMountDown(m);
+                var (live, _) = await StopMountAsync(m);
+                NotifyMountDown(m, live);
                 RefreshMountList();
             }
             catch (Exception ex)
