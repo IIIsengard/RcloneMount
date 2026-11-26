@@ -251,12 +251,14 @@ namespace RcloneMount.Services
         // Atomic write: the text goes to a unique .tmp sibling, then File.Move(overwrite)
         // renames it over the target — atomic on NTFS same-volume, so a crash or power loss
         // leaves either the old file or the new one, never a truncated one. UTF-8, no BOM.
-        internal static void WriteAtomic(string path, string text)
+        internal static void WriteAtomic(string path, string text) => WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(text));
+
+        internal static void WriteAtomic(string path, byte[] bytes)
         {
             var tmp = $"{path}.{Guid.NewGuid():N}.tmp";
             try
             {
-                File.WriteAllText(tmp, text);
+                File.WriteAllBytes(tmp, bytes);
                 File.Move(tmp, path, overwrite: true);
             }
             finally

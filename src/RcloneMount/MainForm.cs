@@ -645,8 +645,10 @@ namespace RcloneMount
             mountService.MountExited += MountService_MountExited;
             StartStatsPolling();
 
-            await RefreshRemotesAsync();
-            await RepairMountRemoteNamesAsync();
+            // Repair prunes mounts whose remote is gone; an unread (e.g. still locked) config
+            // would make every mount look orphaned and delete them all from settings.json.
+            if (await RefreshRemotesAsync())
+                await RepairMountRemoteNamesAsync();
             UpdateActionButtons();
             // Fire-and-forget: seeds the OAuth-type index so the Reconnect button appears
             // on first rail selection without needing the user to open Add/Edit first.

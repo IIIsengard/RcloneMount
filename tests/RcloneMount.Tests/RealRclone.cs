@@ -1,3 +1,5 @@
+using RcloneMount.Services;
+
 namespace RcloneMount.Tests;
 
 // Real-rclone integration tests run against C:\rclone\rclone.exe (override with RCLONE_EXE)
@@ -13,4 +15,9 @@ internal static class RealRclone
             return File.Exists(p) ? p : null;
         }
     }
+
+    // False when rclone is missing or older than `min` (e.g. "1.75"), so version-bound tests return early.
+    internal static bool AtLeast(string min) =>
+        Exe is { } exe
+        && UpdateChecker.Compare(UpdateChecker.NormalizeVersion(RcloneLocator.ExamineAsync(exe).GetAwaiter().GetResult()?.Version ?? ""), min) >= 0;
 }

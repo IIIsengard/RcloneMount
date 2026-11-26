@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -60,14 +61,7 @@ namespace RcloneMount.Services
 
             var rcPort = ReserveFreeLoopbackPort();
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            var psi = RcloneConfigPassword.StartInfo(exePath);
             foreach (var arg in BuildArgs(mount, rcPort, Remotes()))
                 psi.ArgumentList.Add(arg);
 
@@ -81,7 +75,10 @@ namespace RcloneMount.Services
                 processes.TryRemove(mount.Id, out _);
                 bool intentional;
                 lock (shutdownGate) intentional = intentionalShutdowns.Remove(mount.Id);
-                MountExited?.Invoke(this, new MountExitedEventArgs(mount.Id, proc.ExitCode, mp.SnapshotStderr(), intentional));
+                var output = mp.SnapshotStderr();
+                if (proc.ExitCode != 0 && output.Any(RcloneConfigPassword.IsPasswordError))
+                    output = output.Append(RcloneConfigPassword.RefreshHint).ToArray();
+                MountExited?.Invoke(this, new MountExitedEventArgs(mount.Id, proc.ExitCode, output, intentional));
             };
 
             if (!proc.Start())

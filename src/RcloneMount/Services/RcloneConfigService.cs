@@ -52,8 +52,12 @@ namespace RcloneMount.Services
 
         public Task DeleteRemoteAsync(string name) => RunExpectSuccessAsync("config", "delete", name);
 
+        internal const string EncryptedRenameMessage =
+            "rclone.conf is encrypted, so RcloneMount can't rename remotes. Nothing was changed. " +
+            "To rename, open the rclone terminal, run 'rclone config' and choose 'r) Rename remote'.";
+
         // rclone has no `config rename` subcommand — rename by editing the section header
-        // in rclone.conf directly.
+        // in rclone.conf directly. Refused for an encrypted config: the file is ciphertext.
         public async Task RenameRemoteAsync(string oldName, string newName)
         {
             if (string.Equals(oldName, newName, StringComparison.Ordinal))
@@ -62,6 +66,8 @@ namespace RcloneMount.Services
             var configPath = SettingsService.ResolveRcloneConfigPath();
             if (!File.Exists(configPath))
                 throw new FileNotFoundException("rclone.conf not found.", configPath);
+            if (RcloneConfigPassword.IsEncrypted(configPath))
+                throw new InvalidOperationException(EncryptedRenameMessage);
 
             var lines = await File.ReadAllLinesAsync(configPath).ConfigureAwait(false);
             var oldHeader = "[" + oldName + "]";
@@ -100,6 +106,7 @@ namespace RcloneMount.Services
             };
             psi.Environment["PATH"] = Path.GetDirectoryName(exePath) + ";" + psi.Environment["PATH"];
             psi.Environment["RCLONE_CONFIG"] = SettingsService.ResolveRcloneConfigPath();
+            RcloneConfigPassword.AddTo(psi);
             Process.Start(psi);
         }
 
@@ -154,14 +161,7 @@ namespace RcloneMount.Services
         // before encoding so we don't feed an expired token into its own reissue.
         public async Task<string> AuthorizeAsync(string type, IReadOnlyDictionary<string, string>? authConfig, IProgress<string>? onProgress, CancellationToken cancellationToken)
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            var psi = RcloneConfigPassword.StartInfo(exePath);
             psi.ArgumentList.Add("authorize");
             psi.ArgumentList.Add(type);
 
@@ -223,14 +223,27 @@ namespace RcloneMount.Services
         // stopped applying after a sub-provider switch — `rclone config update` can only
         // add or change keys, never delete them, so we edit the file directly (same
         // pattern as RenameRemoteAsync). No-op when the section is missing or the set
-        // is empty.
-        public async Task PruneRemoteAsync(string name, IReadOnlySet<string> keysToRemove)
+        // is empty. Returns null when done, otherwise why the keys were left in place: the
+        // update itself has already succeeded, so that is a note, not a failure.
+        public async Task<string?> PruneRemoteAsync(string name, IReadOnlySet<string> keysToRemove, string? rcloneVersion)
         {
-            if (keysToRemove is null || keysToRemove.Count == 0) return;
+            if (keysToRemove is null || keysToRemove.Count == 0) return null;
 
             var configPath = SettingsService.ResolveRcloneConfigPath();
             if (!File.Exists(configPath))
-                return;
+                return null;
+
+            // Encrypted config is ciphertext: let rclone remove the keys and re-encrypt.
+            // shortcut: plain configs keep the text edit so rclone < v1.75 still prunes them,
+            // switch everything to `config unset` once v1.75 is the minimum supported rclone.
+            if (RcloneConfigPassword.IsEncrypted(configPath))
+            {
+                if (!SupportsConfigUnset(rcloneVersion))
+                    return EncryptedPruneNeedsNewerRclone;
+                var args = new[] { "config", "unset", name }.Concat(keysToRemove).ToArray();
+                var (_, stderr, exit) = await RunAsync(args).ConfigureAwait(false);
+                return exit == 0 ? null : "Old options were left in place: " + DescribeFailure(args, stderr);
+            }
 
             var lines = await File.ReadAllLinesAsync(configPath).ConfigureAwait(false);
             var header = "[" + name + "]";
@@ -266,7 +279,16 @@ namespace RcloneMount.Services
 
             if (changed)
                 SettingsService.WriteAtomic(configPath, string.Join("\r\n", output) + "\r\n");
+            return null;
         }
+
+        internal const string EncryptedPruneNeedsNewerRclone =
+            "Old options were left in place: removing them from an encrypted rclone.conf needs rclone 1.75 or later.";
+
+        // `config unset` arrived in rclone v1.75; older builds read it as `rclone config` plus
+        // stray arguments and only print usage.
+        internal static bool SupportsConfigUnset(string? rcloneVersion) =>
+            UpdateChecker.Compare(UpdateChecker.NormalizeVersion(rcloneVersion ?? ""), "1.75") >= 0;
 
         // Result of TestConnectionAsync — a boolean gate plus enough detail to render
         // a "✓ Connected in 425 ms · Free 12.3 GB / Total 100 GB" line without the UI
@@ -360,14 +382,7 @@ namespace RcloneMount.Services
 
         private async Task<(string Stdout, string Stderr, int ExitCode)> RunCancellableAsync(CancellationToken ct, params string[] args)
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            var psi = RcloneConfigPassword.StartInfo(exePath);
             foreach (var a in args) psi.ArgumentList.Add(a);
 
             using var proc = Process.Start(psi) ?? throw new IOException("Failed to start rclone.");
@@ -397,14 +412,7 @@ namespace RcloneMount.Services
 
         private async Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(params string[] args)
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            var psi = RcloneConfigPassword.StartInfo(exePath);
             foreach (var a in args)
                 psi.ArgumentList.Add(a);
 

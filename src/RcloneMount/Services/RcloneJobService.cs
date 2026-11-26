@@ -169,14 +169,7 @@ namespace RcloneMount.Services
                 Directory.CreateDirectory(reportDir);
             }
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            var psi = RcloneConfigPassword.StartInfo(exePath);
             psi.ArgumentList.Add(spec.OperationVerb);
             psi.ArgumentList.Add(spec.SourceSpec);
             psi.ArgumentList.Add(spec.DestSpec);
@@ -352,6 +345,8 @@ namespace RcloneMount.Services
 
             string tail;
             lock (stderrLock) tail = stderrTail.ToString();
+            if (exit != 0 && RcloneConfigPassword.IsPasswordError(tail))
+                tail += RcloneConfigPassword.RefreshHint + Environment.NewLine;
 
             // Best-effort delete of the caller's temp filter file — we own the
             // deletion (rather than the dialog) because a modeless close mid-run

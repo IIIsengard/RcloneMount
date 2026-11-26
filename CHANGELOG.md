@@ -32,6 +32,12 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **A locked or unreadable `rclone.conf` no longer deletes your mounts.**
+  When the remote list could not be read at startup (for example an
+  encrypted config), every mount was removed from `settings.json` as
+  "orphaned". The repair now runs only when the list loaded.
+- **rclone no longer waits forever on a hidden password prompt.** A missing
+  or wrong config password now fails fast, and RcloneMount asks again once.
 - **Cancelling a running job now shows it as Cancelled.** It used to end
   as Failed or Completed, depending on how rclone exited.
 - **A schedule the app cannot read is no longer silently ignored.** The
@@ -89,6 +95,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
   in place; only new rows are constructed, only vanished rows disposed.
 
 ### Added
+- **Encrypted `rclone.conf` support.** RcloneMount asks for the config
+  password once and keeps it protected for your Windows account (DPAPI,
+  under `%AppData%\RcloneMount`). It passes the password to every mount,
+  job and the rclone terminal through the child's environment, never on a
+  command line or in a log, so scheduled jobs run unattended. Renaming a
+  remote is refused on an encrypted config (use `rclone config`), and
+  removing old options after a provider switch needs rclone 1.75 or later.
 - **More schedule types.** Besides `daily HH:MM`, jobs now accept
   `weekdays HH:MM`, chosen days such as `mon,wed 21:30`, and `every 6h`.
   The Jobs list shows each job's next run. Daily and day-based schedules

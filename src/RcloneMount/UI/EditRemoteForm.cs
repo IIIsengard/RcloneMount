@@ -57,10 +57,14 @@ namespace RcloneMount.UI
         public bool RequiresOAuth => provider.Options.Any(o =>
             string.Equals(o.Name, "token", StringComparison.OrdinalIgnoreCase));
 
+        private const string LockedNameReason =
+            "rclone.conf is encrypted, so the name can't be changed here. Rename with 'rclone config' in the rclone terminal.";
+
         public EditRemoteForm(RcloneProvider provider,
                               IReadOnlyDictionary<string, string>? existing,
                               string? existingName,
-                              IEnumerable<string> takenRemoteNames)
+                              IEnumerable<string> takenRemoteNames,
+                              bool lockName = false)
         {
             this.provider = provider;
             initialValues = existing is null
@@ -82,7 +86,10 @@ namespace RcloneMount.UI
             txtName = new TextBox
             {
                 Width = 260,
-                Text = existingName ?? ""
+                Text = existingName ?? "",
+                // Read-only rather than disabled: still focusable, so screen readers reach the reason.
+                ReadOnly = lockName,
+                AccessibleDescription = lockName ? LockedNameReason : null,
             };
             // Land the cursor at the end without a selection highlight when this box gets
             // focus, so pre-filled names read as normal dark text instead of a bright-blue
@@ -208,7 +215,21 @@ namespace RcloneMount.UI
             txtName.Location = new Point(inputX, y);
             txtName.Width = inputWidth;
             panelFields.Controls.Add(txtName);
-            y += 36;
+            if (txtName.ReadOnly)
+            {
+                var nameReason = new Label
+                {
+                    Text = LockedNameReason,
+                    Location = new Point(inputX, y + 28),
+                    MaximumSize = new Size(inputWidth, 0),
+                    AutoSize = true,
+                    ForeColor = Theme.TextSecondary,
+                };
+                panelFields.Controls.Add(nameReason);
+                y = nameReason.Bottom + 14;
+            }
+            else
+                y += 36;
 
             foreach (var opt in provider.Options)
             {

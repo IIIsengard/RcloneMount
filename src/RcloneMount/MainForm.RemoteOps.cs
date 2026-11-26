@@ -132,26 +132,90 @@ namespace RcloneMount
             }
         }
 
-        private async Task RefreshRemotesAsync()
+        // False when the remotes could not be read, so callers don't take "unknown" for "none".
+        private async Task<bool> RefreshRemotesAsync()
         {
             if (configService is null)
-                return;
+                return false;
 
             try
             {
-                remotes = await configService.ListRemotesAsync();
+                var tried = RcloneConfigPassword.Current();
+                try
+                {
+                    remotes = await configService.ListRemotesAsync();
+                }
+                catch (InvalidOperationException ex) when (RcloneConfigPassword.IsPasswordError(ex.Message))
+                {
+                    if (!await UnlockConfigAsync(tried))
+                        return false;
+                }
+                // Encryption removed (or never on): the stored password must not outlive it. Only
+                // a file read as plain counts; a locked or missing one keeps it for unattended jobs.
+                if (RcloneConfigPassword.ReadEncrypted(SettingsService.ResolveRcloneConfigPath()) == false)
+                    RcloneConfigPassword.Clear();
                 RebuildRail();
                 SetStatus($"Loaded {remotes.Count} remote(s).");
+                return true;
             }
             catch (Exception ex)
             {
                 SetStatus($"Failed to read remotes: {ex.Message}");
+                return false;
             }
             finally
             {
                 UpdateActionButtons();
             }
         }
+
+        // Set while one refresh asks for the password, so overlapping refreshes (Refresh,
+        // Locate rclone, startup) never stack a second dialog.
+        private bool unlockingConfig;
+
+        // Encrypted rclone.conf with no, a wrong or a stale password: forget it and ask once.
+        // The typed password is stored only after rclone decrypted the config with it.
+        private async Task<bool> UnlockConfigAsync(string? tried)
+        {
+            // Another refresh is asking, or stored a new password after this attempt started:
+            // leave that password alone.
+            if (unlockingConfig || configService is not { } svc || RcloneConfigPassword.Current() != tried)
+                return false;
+            unlockingConfig = true;
+            try
+            {
+                RcloneConfigPassword.Clear();
+                string typed;
+                using (var dlg = new ConfigPasswordDialog())
+                {
+                    if (dlg.ShowDialog(Visible ? this : null) != DialogResult.OK)
+                    {
+                        SetStatus(ConfigLockedStatus);
+                        return false;
+                    }
+                    typed = dlg.Password;
+                }
+                RcloneConfigPassword.Pending = typed;
+                try
+                {
+                    remotes = await svc.ListRemotesAsync();
+                }
+                catch (InvalidOperationException ex) when (RcloneConfigPassword.IsPasswordError(ex.Message))
+                {
+                    SetStatus(ConfigLockedStatus);
+                    return false;
+                }
+                RcloneConfigPassword.Save(typed);
+                return true;
+            }
+            finally
+            {
+                RcloneConfigPassword.Pending = null;
+                unlockingConfig = false;
+            }
+        }
+
+        private const string ConfigLockedStatus = "rclone.conf is encrypted and still locked. Click Refresh to enter its password.";
 
         private void BtnConfigureRemotes_Click(object? sender, EventArgs e)
         {
@@ -278,7 +342,10 @@ namespace RcloneMount
             }
 
             var others = remotes.Where(r => !string.Equals(r.Name, selected.Name, StringComparison.Ordinal)).Select(r => r.Name);
-            using var editor = new EditRemoteForm(provider, selected.Parameters, selected.Name, others);
+            // Encrypted rclone.conf can't be renamed from here (RenameRemoteAsync refuses it too),
+            // so the name is locked up front and no other edit is lost to that refusal.
+            using var editor = new EditRemoteForm(provider, selected.Parameters, selected.Name, others,
+                lockName: RcloneConfigPassword.IsEncrypted(SettingsService.ResolveRcloneConfigPath()));
             if (editor.ShowDialog(this) != DialogResult.OK)
                 return;
 
@@ -331,8 +398,9 @@ namespace RcloneMount
 
                 SetStatus($"Updating remote {newName}...");
                 await configService.UpdateRemoteAsync(newName, editor.ResultValues, obscurePasswords: true);
-                if (editor.KeysToPrune.Count > 0)
-                    await configService.PruneRemoteAsync(newName, editor.KeysToPrune);
+                var pruneNote = editor.KeysToPrune.Count > 0
+                    ? await configService.PruneRemoteAsync(newName, editor.KeysToPrune, rcloneInfo?.Version)
+                    : null;
                 await RefreshRemotesAsync();
 
                 foreach (var m in mountsToRemount)
@@ -348,6 +416,8 @@ namespace RcloneMount
                         ? $"Renamed to {newName}, {mountsToRemount.Count} mount(s) remounted."
                         : $"Renamed to {newName} and updated.")
                     : $"Updated remote {newName}.");
+                if (pruneNote is not null)
+                    activityLog.Warn(pruneNote);
             }
             catch (Exception ex)
             {
