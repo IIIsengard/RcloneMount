@@ -194,7 +194,7 @@ changes (e.g. `settings.json` shape changes that need a migration).
   until you pick a remote again.
 - **A job does not start when its remote cannot be checked**, for example while `rclone.conf`
   is locked or has no remotes at all. The run fails with the reason and your job is not changed.
-  Jobs that pass their own `--config` or `--password-command` are not checked.
+  Jobs that pass their own `--config` or `--password-command` are not checked or stopped.
 - **A job does not run through a crypt, alias, union or other wrapping remote whose underlying
   remote is gone.** The run fails and names the missing remote. `rclone.conf` is not changed.
 - **Remotes defined by environment variables** (`RCLONE_CONFIG_<NAME>_TYPE`) are no longer

@@ -71,6 +71,7 @@ namespace RcloneMount.UI
         // duplicate, and so the enqueued run reports back with the right JobId.
         private string? editingJobId;
         internal string? JobId => editingJobId;
+        internal IEnumerable<string> ExtraFlags => RcloneMountService.SplitFlags(txtExtraFlags.Text ?? "");
         // InputSnapshot() as of the last load or Save; a run is credited to the job only while it still matches.
         private object? savedInputs;
 

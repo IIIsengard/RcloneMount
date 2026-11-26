@@ -151,13 +151,12 @@ namespace RcloneMount
             if (configService is null)
                 return false;
 
-            var version = remoteWriteVersion;
             try
             {
                 var tried = RcloneConfigPassword.Current();
                 try
                 {
-                    remotes = await configService.ListRemotesAsync();
+                    await ReadRemotesAsync();
                 }
                 catch (InvalidOperationException ex) when (RcloneConfigPassword.IsPasswordError(ex.Message))
                 {
@@ -167,15 +166,12 @@ namespace RcloneMount
                         return false;
                     }
                 }
-                remoteListRead = true;
                 // Encryption removed (or never on): the stored password must not outlive it. Only
                 // a file read as plain counts; a locked or missing one keeps it for unattended jobs.
                 if (RcloneConfigPassword.ReadEncrypted(SettingsService.ResolveRcloneConfigPath()) == false)
                     RcloneConfigPassword.Clear();
                 RebuildRail();
                 SetStatus($"Loaded {remotes.Count} remote(s).");
-                if (remoteWritesActive == 0 && version == remoteWriteVersion)
-                    await MarkMissingRemotesAsync(remotes);
                 return true;
             }
             catch (Exception ex)
@@ -200,7 +196,7 @@ namespace RcloneMount
         {
             // Another refresh is asking, or stored a new password after this attempt started:
             // leave that password alone.
-            if (unlockingConfig || configService is not { } svc || RcloneConfigPassword.Current() != tried)
+            if (unlockingConfig || configService is null || RcloneConfigPassword.Current() != tried)
                 return false;
             unlockingConfig = true;
             try
@@ -219,7 +215,7 @@ namespace RcloneMount
                 RcloneConfigPassword.Pending = typed;
                 try
                 {
-                    remotes = await svc.ListRemotesAsync();
+                    await ReadRemotesAsync();
                 }
                 catch (InvalidOperationException ex) when (RcloneConfigPassword.IsPasswordError(ex.Message))
                 {
@@ -332,7 +328,7 @@ namespace RcloneMount
             try
             {
                 SetStatus($"Creating remote {editor.RemoteName}...");
-                await configService.CreateRemoteAsync(editor.RemoteName, picker.Selected.Name, editor.ResultValues, obscurePasswords: true);
+                await CreateRemoteAsync(editor.RemoteName, picker.Selected.Name, editor.ResultValues);
                 await RefreshRemotesAsync();
                 SetStatus($"Created remote {editor.RemoteName}.");
                 if (editor.RequiresOAuth)
@@ -454,10 +450,13 @@ namespace RcloneMount
                 }
 
                 SetStatus($"Updating remote {newName}...");
-                await service.UpdateRemoteAsync(newName, values, obscurePasswords: true);
-                var pruneNote = keysToPrune.Count > 0
-                    ? await service.PruneRemoteAsync(newName, keysToPrune, rcloneInfo?.Version)
-                    : null;
+                string? pruneNote = null;
+                await ChangeRemoteAsync(async () =>
+                {
+                    await service.UpdateRemoteAsync(newName, values, obscurePasswords: true);
+                    if (keysToPrune.Count > 0)
+                        pruneNote = await service.PruneRemoteAsync(newName, keysToPrune, rcloneInfo?.Version);
+                });
                 await RefreshRemotesAsync();
                 return pruneNote;
             }
@@ -500,10 +499,10 @@ namespace RcloneMount
                 await SaveSettingsAsync();
         }
 
-        // Renames a remote in the saved jobs; returns the jobs that used it.
-        private List<TransferJob> RepointJobs(string oldName, string newName)
+        // Renames a remote in the saved jobs (those `which` accepts); returns the jobs that used it.
+        private List<TransferJob> RepointJobs(string oldName, string newName, Func<TransferJob, bool>? which = null)
         {
-            var users = jobs.Where(j => j.SourceRemote == oldName || j.DestRemote == oldName).ToList();
+            var users = jobs.Where(j => (j.SourceRemote == oldName || j.DestRemote == oldName) && which?.Invoke(j) != false).ToList();
             foreach (var job in users)
             {
                 if (job.SourceRemote == oldName) job.SourceRemote = newName;
@@ -514,19 +513,24 @@ namespace RcloneMount
 
         // After a delete, nothing that named the remote may reach a later one of the same name: jobs,
         // queued runs and open windows keep a "deleted" mark until the user picks a remote again.
-        private async Task ApplyRemoteDeletedAsync(string name)
+        private Task ApplyRemoteDeletedAsync(string name) => ApplyRemoteGoneAsync(name, spareOwnConfig: false);
+
+        // spareOwnConfig: the name left the app's configuration by other hands, which says nothing about jobs,
+        // runs and windows with their own --config or --password-command. An in-app delete takes them all.
+        private async Task ApplyRemoteGoneAsync(string name, bool spareOwnConfig)
         {
+            bool Affects(IEnumerable<string> flags) => !(spareOwnConfig && RcloneRemote.UsesOwnConfig(flags));
             var mark = RcloneRemote.MarkDeleted(name);
-            var users = RepointJobs(name, mark);
+            var users = RepointJobs(name, mark, job => Affects(FlagsOf(job)));
             foreach (var job in users)
             {
                 job.InFlight = false; // never offered for resume; the schedule text stays
                 job.InFlightStartedUtc = null;
             }
             // A running rclone has read the config already: a sync would go on deleting.
-            jobQueue?.CancelRuns(TransfersUsing(name));
-            jobQueue?.RenameRemote(name, mark);
-            foreach (var dialog in OwnedForms.OfType<TransferDialog>())
+            jobQueue?.CancelRuns(TransfersUsing(name).Where(run => Affects(run.Spec.ExtraArgs)));
+            jobQueue?.RenameRemote(name, mark, spec => Affects(spec.ExtraArgs));
+            foreach (var dialog in OwnedForms.OfType<TransferDialog>().Where(d => Affects(d.ExtraFlags)))
                 dialog.ForgetRemote(name);
             remotes = remotes.Where(r => r.Name != name).ToArray();
             RefreshJobsList();
@@ -534,8 +538,10 @@ namespace RcloneMount
                 await SaveSettingsAsync();
         }
 
-        // While the app itself renames or deletes a remote, a list read may not match the jobs yet.
-        private int remoteWritesActive, remoteWriteVersion;
+        // While the app itself changes a remote, a list read may not match the jobs yet.
+        private int remoteWritesActive;
+        // Reads are numbered as they start. Those up to `remoteReadsSettled` may no longer be taken.
+        private int remoteReadsStarted, remoteReadsSettled;
 
         private async Task ChangeRemoteAsync(Func<Task> change)
         {
@@ -544,34 +550,66 @@ namespace RcloneMount
             finally
             {
                 remoteWritesActive--;
-                remoteWriteVersion++;
+                remoteReadsSettled = remoteReadsStarted;
             }
         }
 
+        // Guarded like rename and delete: a list being read may not have the new remote yet.
+        private Task CreateRemoteAsync(string name, string type, IReadOnlyDictionary<string, string> values) =>
+            ChangeRemoteAsync(() => configService!.CreateRemoteAsync(name, type, values, obscurePasswords: true));
+
+        // Every list the app takes in comes from here. One that ends after a later read was taken, or across an
+        // in-app change or a switch of rclone, is read again. A list that passes replaces `remotes` and marks
+        // jobs before anything else can run, so an older one can do neither.
+        private async Task<IReadOnlyList<RcloneRemote>> ReadRemotesAsync(Action<IReadOnlyList<RcloneRemote>>? beforeTaking = null)
+        {
+            while (true)
+            {
+                var service = configService ?? throw new InvalidOperationException("rclone.exe was not found.");
+                var deadline = DateTime.UtcNow + service.ListTimeout;
+                while (remoteWritesActive > 0)
+                {
+                    if (DateTime.UtcNow > deadline)
+                        throw new TimeoutException("A remote change in the app has not finished.");
+                    await Task.Delay(100);
+                }
+                var number = ++remoteReadsStarted;
+                var read = await service.ListRemotesAsync();
+                if (service != configService || remoteWritesActive > 0 || number <= remoteReadsSettled) continue;
+                remoteReadsSettled = number;
+                beforeTaking?.Invoke(read);
+                remotes = read;
+                remoteListRead = true;
+                await MarkMissingRemotesAsync(read);
+                return read;
+            }
+        }
+
+        private static bool UsesOwnConfig(TransferJob job) => RcloneRemote.UsesOwnConfig(FlagsOf(job));
+
+        private static IEnumerable<string> FlagsOf(TransferJob job) => RcloneMountService.SplitFlags(job.ExtraFlags ?? "");
+
         // For remotes renamed or deleted outside the app: jobs naming one that `read` no longer has are
-        // marked as an in-app delete marks them. True when any was.
-        private async Task<bool> MarkMissingRemotesAsync(IReadOnlyList<RcloneRemote> read)
+        // marked as an in-app delete marks them. Jobs with their own --config or --password-command never are.
+        private async Task MarkMissingRemotesAsync(IReadOnlyList<RcloneRemote> read)
         {
             // No remotes at all is more likely a missing or wrong config file: runs are refused, jobs kept.
-            if (read.Count == 0) return false;
-            // shortcut: a job with its own --config or --password-command is not checked, but is marked if another
-            // job's check finds the same name gone; run its check with those flags if such jobs turn out to be used.
-            var gone = jobs.Where(j => !RcloneRemote.UsesOwnConfig(RcloneMountService.SplitFlags(j.ExtraFlags ?? "")))
-                .SelectMany(j => new[] { j.SourceRemote, j.DestRemote })
+            if (read.Count == 0) return;
+            var judged = jobs.Where(j => !UsesOwnConfig(j)).ToList();
+            var gone = judged.SelectMany(j => new[] { j.SourceRemote, j.DestRemote })
                 .Where(name => RcloneRemote.IsMissing(name, read)).Distinct(StringComparer.Ordinal).ToList();
-            if (gone.Count == 0) return false;
+            if (gone.Count == 0) return;
 
-            var stopped = jobs.Select(j => (j.Name, Lost: gone.Where(g => g == j.SourceRemote || g == j.DestRemote).ToList()))
+            var stopped = judged.Select(j => (j.Name, Lost: gone.Where(g => g == j.SourceRemote || g == j.DestRemote).ToList()))
                 .Where(j => j.Lost.Count > 0)
                 .Select(j => $"{(string.IsNullOrWhiteSpace(j.Name) ? "(unnamed)" : j.Name)} ({string.Join(", ", j.Lost.Select(g => $"\"{g}\""))})");
             var message = $"No longer in rclone's configuration, so these saved jobs are stopped: {string.Join(", ", stopped)}. "
                 + "Edit each job and pick a remote.";
             // Every job is marked before the first await, so an overlapping check finds nothing to report.
-            var marking = gone.Select(ApplyRemoteDeletedAsync).ToList();
+            var marking = gone.Select(name => ApplyRemoteGoneAsync(name, spareOwnConfig: true)).ToList();
             activityLog.Warn(message);
             Notify("Saved jobs stopped", message, ToolTipIcon.Warning, 8000);
             await Task.WhenAll(marking);
-            return true;
         }
 
         // Why `read` does not allow this run: a remote it names, or one behind a wrapper it names, is not there.
@@ -593,36 +631,24 @@ namespace RcloneMount
         {
             if (Refusal(run.Spec, Array.Empty<RcloneRemote>()) is null) return; // nothing to look up
 
+            (string Reason, bool ViaWrapper)? refusal = null;
+            var namesChanged = false;
             IReadOnlyList<RcloneRemote> read;
-            int version;
-            do
+            try
             {
-                var service = configService ?? throw new InvalidOperationException("Not run: rclone.exe was not found.");
-                var deadline = DateTime.UtcNow + service.ListTimeout;
-                while (remoteWritesActive > 0)
+                read = await ReadRemotesAsync(list =>
                 {
-                    if (DateTime.UtcNow > deadline)
-                        throw new InvalidOperationException("Not run: a remote rename or delete has not finished.");
-                    await Task.Delay(100);
-                }
-                version = remoteWriteVersion;
-                try { read = await service.ListRemotesAsync(); }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException("Not run: the remotes could not be checked. "
-                        + (RcloneConfigPassword.IsPasswordError(ex.Message) ? RcloneConfigPassword.RefreshHint : ex.Message), ex);
-                }
+                    refusal = Refusal(run.Spec, list); // before marking, which renames this run's remote and cancels it
+                    namesChanged = !list.Select(r => r.Name).SequenceEqual(remotes.Select(r => r.Name));
+                });
             }
-            while (remoteWritesActive > 0 || version != remoteWriteVersion);
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Not run: the remotes could not be checked. "
+                    + (RcloneConfigPassword.IsPasswordError(ex.Message) ? RcloneConfigPassword.RefreshHint : ex.Message), ex);
+            }
+            if (namesChanged) RebuildRail();
 
-            // Before marking, which renames this run's remote and cancels it.
-            var refusal = Refusal(run.Spec, read);
-            if (await MarkMissingRemotesAsync(read))
-            {
-                remotes = read;
-                remoteListRead = true;
-                RebuildRail();
-            }
             if (refusal is not { } no) return;
             var reason = read.Count == 0
                 ? "Not run: rclone's configuration has no remotes. Check that rclone uses the right config file."
@@ -756,7 +782,7 @@ namespace RcloneMount
             try
             {
                 SetStatus($"Creating remote {editor.RemoteName}...");
-                await configService.CreateRemoteAsync(editor.RemoteName, provider.Name, editor.ResultValues, obscurePasswords: true);
+                await CreateRemoteAsync(editor.RemoteName, provider.Name, editor.ResultValues);
                 await RefreshRemotesAsync();
                 SetStatus($"Duplicated {selected.Name} → {editor.RemoteName}.");
                 if (editor.RequiresOAuth)
@@ -889,7 +915,7 @@ namespace RcloneMount
                 {
                     SetStatus($"Saving OAuth token for {remoteName}...");
                     var tokenValues = new Dictionary<string, string>(StringComparer.Ordinal) { ["token"] = dlg.Token };
-                    await configService.UpdateRemoteAsync(remoteName, tokenValues, obscurePasswords: false);
+                    await ChangeRemoteAsync(() => configService.UpdateRemoteAsync(remoteName, tokenValues, obscurePasswords: false));
                     await RefreshRemotesAsync();
                     SetStatus($"Authorized {remoteName}.");
 

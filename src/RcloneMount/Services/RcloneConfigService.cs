@@ -18,6 +18,13 @@ namespace RcloneMount.Services
         // Longest wait for `config dump`, which may also run a password command. Settable for tests.
         internal TimeSpan ListTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
+        // Stops an rclone that outlived its timeout. Settable for tests.
+        internal Action<Process> Kill { get; init; } = proc => proc.Kill(entireProcessTree: true);
+
+        internal Action<string>? Warn { get; init; }
+
+        private static readonly TimeSpan DrainWait = TimeSpan.FromSeconds(2);
+
         public RcloneConfigService(string exePath)
         {
             this.exePath = exePath;
@@ -562,16 +569,30 @@ namespace RcloneMount.Services
             using var proc = Process.Start(psi) ?? throw new IOException("Failed to start rclone.");
             var stdoutTask = proc.StandardOutput.ReadToEndAsync();
             var stderrTask = proc.StandardError.ReadToEndAsync();
+            // The pipes too: a grandchild (password command) can keep them open after rclone exits.
+            var finished = Task.WhenAll(stdoutTask, stderrTask, proc.WaitForExitAsync());
             try
             {
-                // The pipes too: a grandchild (password command) can keep them open after rclone exits.
-                await Task.WhenAll(stdoutTask, stderrTask, proc.WaitForExitAsync()).WaitAsync(timeout).ConfigureAwait(false);
+                await finished.WaitAsync(timeout).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
-                try { proc.Kill(entireProcessTree: true); } catch { } // may have just exited
-                throw new TimeoutException(
-                    $"rclone {string.Join(' ', args.Take(2))} did not finish within {timeout.TotalSeconds:0.#} s and was stopped.");
+                var command = $"rclone {string.Join(' ', args.Take(2))}";
+                var outcome = "was stopped";
+                try { Kill(proc); }
+                catch (Exception ex)
+                {
+                    outcome = "could not be stopped";
+                    Warn?.Invoke($"Could not stop {command} (process {proc.Id}): {ex.Message}");
+                }
+                // Let the readers end with the process; close the pipes if something still holds them open.
+                if (await Task.WhenAny(finished, Task.Delay(DrainWait)).ConfigureAwait(false) != finished)
+                {
+                    proc.StandardOutput.Dispose();
+                    proc.StandardError.Dispose();
+                }
+                _ = finished.ContinueWith(t => t.Exception, TaskScheduler.Default); // a closed pipe's error is expected
+                throw new TimeoutException($"{command} did not finish within {timeout.TotalSeconds:0.#} s and {outcome}.");
             }
             return (await stdoutTask.ConfigureAwait(false), await stderrTask.ConfigureAwait(false), proc.ExitCode);
         }

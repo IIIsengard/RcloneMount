@@ -689,7 +689,7 @@ namespace RcloneMount
 
             lblRcloneInstalled.Text = $"Installed: {rcloneInfo.Version}   —   {rcloneInfo.ExecutablePath}";
             lblRcloneInstalled.ForeColor = Theme.TextPrimary;
-            configService = new RcloneConfigService(rcloneInfo.ExecutablePath);
+            configService = new RcloneConfigService(rcloneInfo.ExecutablePath) { Warn = activityLog.Warn };
             mountService = new RcloneMountService(rcloneInfo.ExecutablePath);
             mountService.Remotes = () => remotes;
             jobService = new RcloneJobService(rcloneInfo.ExecutablePath);
@@ -806,7 +806,7 @@ namespace RcloneMount
                 rcloneInfo = info;
                 lblRcloneInstalled.Text = $"Installed: {info.Version}   —   {info.ExecutablePath}";
                 lblRcloneInstalled.ForeColor = Theme.TextPrimary;
-                configService = new RcloneConfigService(info.ExecutablePath);
+                configService = new RcloneConfigService(info.ExecutablePath) { Warn = activityLog.Warn };
                 SettingsService.SetRcloneExePath(info.ExecutablePath); // else rclone.conf resolves via the old (or no) exe
                 if (mountService is not null)
                 {

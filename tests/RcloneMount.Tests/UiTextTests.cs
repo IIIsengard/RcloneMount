@@ -819,23 +819,158 @@ public class UiTextTests
         Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
     });
 
-    // A list read while the app renames or deletes a remote can disagree with the jobs for a moment.
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)] // the change began and ended while rclone was reading
-    public void Refresh_MarksNothing_AcrossAnInAppRemoteChange(bool stillRunning) => Sta(() =>
+    // A list read while the app renames, creates or deletes a remote can disagree with the jobs: it waits.
+    [Fact]
+    public void Refresh_WaitsForAnInAppRemoteChange_BeforeReading() => Sta(() =>
     {
         var (form, _) = RemoteShell(Dump("other"));
         var job = SavedJob();
         ((List<TransferJob>)Get(form, "jobs")!).Add(job);
-        if (stillRunning) Set(form, "remoteWritesActive", 1);
+        Set(form, "remoteWritesActive", 1);
 
-        var refresh = (Task)typeof(MainForm).GetMethod("RefreshRemotesAsync", Private)!.Invoke(form, null)!;
-        if (!stillRunning) Set(form, "remoteWriteVersion", 1);
-        Finish(refresh);
-
+        var refresh = Begin(form, "RefreshRemotesAsync");
+        PumpFor(TimeSpan.FromMilliseconds(600));
+        Assert.False(refresh.IsCompleted);
         Assert.Equal("r", job.SourceRemote);
+
+        Set(form, "remoteWritesActive", 0);
+        Finish(refresh);
+        Assert.Equal("r", job.DeletedRemote());
     });
+
+    // An older read that ends last knows less than a newer one: it may neither mark jobs nor bring its list back.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void AnOlderReadThatFinishesLast_NeitherMarksNorReplaces(bool olderIsRunCheck, bool newerIsRunCheck) => Sta(() =>
+    {
+        var (form, log) = RemoteShell("");
+        var (rclone, firstReadStarted, releaseFirstRead) = SlowFirstRclone(Dump("r"), Dump("r", "fresh"));
+        Set(form, "configService", new RcloneConfigService(rclone));
+        Task Read(bool runCheck) => runCheck
+            ? Begin(form, "CheckRunRemotesAsync", new JobRun { Spec = new JobSpec { SourceRemote = "fresh" } })
+            : Begin(form, "RefreshRemotesAsync");
+
+        var older = Read(olderIsRunCheck);
+        PumpUntil(firstReadStarted);
+        var newer = Read(newerIsRunCheck);
+        PumpUntil(() => newer.IsCompleted);
+        Assert.False(older.IsCompleted, "the older read was meant to end last");
+        var job = new TransferJob { Id = "n", SourceRemote = "fresh" };
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        releaseFirstRead();
+        Finish(older); // a run check for "fresh" must pass too
+        newer.GetAwaiter().GetResult();
+
+        Assert.Equal("fresh", job.SourceRemote);
+        Assert.Equal(new[] { "r", "fresh" }, ((IReadOnlyList<RcloneRemote>)Get(form, "remotes")!).Select(r => r.Name));
+        Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
+    });
+
+    // A remote created (or re-created under a deleted name) while a list is being read is not in that list.
+    [Fact]
+    public void ARemoteCreatedWhileTheListIsRead_DoesNotGetItsNewJobMarked() => Sta(() =>
+    {
+        var (form, _) = RemoteShell("");
+        var (rclone, firstReadStarted, releaseFirstRead) = SlowFirstRclone(Dump("r"), Dump("r", "fresh"));
+        Set(form, "configService", new RcloneConfigService(rclone));
+
+        var older = Begin(form, "RefreshRemotesAsync");
+        PumpUntil(firstReadStarted);
+        Call(form, "CreateRemoteAsync", "fresh", "local", new Dictionary<string, string>());
+        var job = new TransferJob { Id = "n", SourceRemote = "fresh" };
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        Assert.False(older.IsCompleted, "the read was meant to outlast the create");
+        releaseFirstRead();
+        Finish(older);
+
+        Assert.Equal("fresh", job.SourceRemote);
+    });
+
+    // A job with its own --config or password command is judged by that run, never by another job's check.
+    [Theory]
+    [InlineData("--config other.conf")]
+    [InlineData("--password-command=\"cmd /c echo x\"")]
+    public void MarkingOneJob_LeavesOwnConfigJobsRunsAndWindowsAlone(string flags) => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Dump("r"));
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        var plain = new TransferJob { Id = "p", Name = "plain", SourceRemote = "gone" };
+        var own = new TransferJob { Id = "o", Name = "separate", SourceRemote = "gone", ExtraFlags = flags, InFlight = true };
+        ((List<TransferJob>)Get(form, "jobs")!).AddRange(new[] { plain, own });
+        var ownArgs = RcloneMountService.SplitFlags(flags).ToList();
+        var ownRunning = queue.Enqueue(new JobSpec { SourceRemote = "gone", ExtraArgs = ownArgs }, "own running", "o");
+        using var cts = new CancellationTokenSource();
+        ownRunning.State = JobRunState.Running;
+        ownRunning.Cts = cts;
+        var ownQueued = queue.Enqueue(new JobSpec { SourceRemote = "gone", ExtraArgs = ownArgs }, "own queued", "o");
+        var plainQueued = queue.Enqueue(new JobSpec { SourceRemote = "gone" }, "plain queued", "p");
+        using var open = new TransferDialog(new[] { new RcloneRemote { Name = "gone", Type = "mega" } }, null, "gone", "",
+            saveCallback: _ => { }, existingJob: own);
+        open.Owner = form;
+
+        Call(form, "RefreshRemotesAsync");
+
+        Assert.Equal("gone", plain.DeletedRemote());
+        Assert.Equal(("gone", true), (own.SourceRemote, own.InFlight));
+        Assert.False(cts.IsCancellationRequested);
+        Assert.Equal(JobRunState.Queued, ownQueued.State);
+        Assert.Equal(("gone", "gone"), (ownRunning.Spec.SourceRemote, ownQueued.Spec.SourceRemote));
+        Assert.Equal(JobRunState.Cancelled, plainQueued.State);
+        Assert.StartsWith("gone (", ((ThemedDropDown)Of(open, "cbSourceRemote")).SelectedText);
+        Assert.DoesNotContain("separate", Assert.Single(log, e => e.Level == ActivityLevel.Warn).Message);
+    });
+
+    // A kill that fails is said, and the caller is still not held by the process that stayed.
+    [Fact]
+    public async Task HungConfigDump_WhoseKillFails_IsLogged_AndStillGivesUp()
+    {
+        var rclone = FakeRclone("", "");
+        File.WriteAllText(rclone, "@echo off\r\nping -n 21 127.0.0.1 >nul\r\n"); // ends by itself
+        var warned = new List<string>();
+        var service = new RcloneConfigService(rclone)
+        {
+            ListTimeout = TimeSpan.FromMilliseconds(500),
+            Kill = _ => throw new System.ComponentModel.Win32Exception("Access is denied."),
+            Warn = warned.Add,
+        };
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var error = await Assert.ThrowsAsync<TimeoutException>(service.ListRemotesAsync);
+
+        Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(15)); // the process runs for 20
+        Assert.Contains("could not be stopped", error.Message);
+        Assert.Contains("Access is denied.", Assert.Single(warned));
+    }
+
+    // The first list read waits for Release, then prints `first`; every later call prints `later` at once.
+    private static (string Exe, Func<bool> FirstReadStarted, Action Release) SlowFirstRclone(string first, string later)
+    {
+        var exe = FakeRclone("", "");
+        var dir = Path.GetDirectoryName(exe)!;
+        File.WriteAllText(Path.Combine(dir, "first.txt"), first);
+        File.WriteAllText(Path.Combine(dir, "later.txt"), later);
+        File.WriteAllText(exe, "@echo off\r\nmove \"%~dp0first.txt\" \"%~dp0taken.txt\" >nul 2>&1 && goto slow\r\n"
+            + "type \"%~dp0later.txt\"\r\nexit /b 0\r\n:slow\r\nif exist \"%~dp0release.txt\" goto done\r\n"
+            + "ping -n 2 127.0.0.1 >nul\r\ngoto slow\r\n:done\r\ntype \"%~dp0taken.txt\"\r\n");
+        return (exe, () => File.Exists(Path.Combine(dir, "taken.txt")),
+            () => File.WriteAllText(Path.Combine(dir, "release.txt"), ""));
+    }
+
+    private static Task Begin(MainForm form, string name, params object?[] args)
+    {
+        var method = typeof(MainForm).GetMethod(name, Private)!;
+        return (Task)method.Invoke(form, args)!;
+    }
+
+    private static void PumpFor(TimeSpan time)
+    {
+        var end = DateTime.UtcNow + time;
+        PumpUntil(() => DateTime.UtcNow > end);
+    }
 
     // The check just before rclone starts.
     [Theory]
@@ -1058,13 +1193,13 @@ public class UiTextTests
         var (form, _) = RemoteShell("");
         var rclone = FakeRclone(Dump("r"), "");
         var done = Path.Combine(Path.GetDirectoryName(rclone)!, "done.txt");
-        File.WriteAllText(rclone, "@echo off\r\nping -n 4 127.0.0.1 >nul\r\necho x>\"%~dp0done.txt\"\r\n");
+        File.WriteAllText(rclone, "@echo off\r\nping -n 7 127.0.0.1 >nul\r\necho x>\"%~dp0done.txt\"\r\n");
         Set(form, "configService", new RcloneConfigService(rclone) { ListTimeout = TimeSpan.FromMilliseconds(500) });
 
         var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { SourceRemote = "r" }));
 
         Assert.Contains("did not finish", error.Message);
-        Thread.Sleep(4000); // past the ping: a process left running would write the file
+        Thread.Sleep(7000); // past the ping: a process left running would write the file
         Assert.False(File.Exists(done), "rclone was left running");
     });
 

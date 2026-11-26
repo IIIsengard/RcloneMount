@@ -142,10 +142,11 @@ namespace RcloneMount.Services
 
         // Queued runs would fail under the old name, or reach a later remote that reuses it. Finished
         // ones change too, for Retry; a running rclone already has its arguments.
-        public void RenameRemote(string oldName, string newName)
+        public void RenameRemote(string oldName, string newName, Func<JobSpec, bool>? which = null)
         {
             lock (gate)
-                foreach (var run in runs) run.Spec = run.Spec.WithRemoteRenamed(oldName, newName);
+                foreach (var run in runs.Where(r => which?.Invoke(r.Spec) != false))
+                    run.Spec = run.Spec.WithRemoteRenamed(oldName, newName);
             RunsChanged?.Invoke();
         }
 
