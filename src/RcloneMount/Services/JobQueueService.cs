@@ -116,6 +116,24 @@ namespace RcloneMount.Services
             RunsChanged?.Invoke();
         }
 
+        // Cancels every queued and running run of a saved job. Queued ones go first, so none of
+        // them starts as a running one ends.
+        public void CancelJob(string jobId)
+        {
+            if (jobId.Length == 0) return; // "" marks ad-hoc runs, which belong to no job
+            foreach (var run in Snapshot().Where(r => r.JobId == jobId && r.IsActive).OrderBy(r => r.State != JobRunState.Queued))
+                Cancel(run.Id);
+        }
+
+        // Queued runs would fail under the old name, or reach a later remote that reuses it. Finished
+        // ones change too, for Retry; a running rclone already has its arguments.
+        public void RenameRemote(string oldName, string newName)
+        {
+            lock (gate)
+                foreach (var run in runs) run.Spec = run.Spec.WithRemoteRenamed(oldName, newName);
+            RunsChanged?.Invoke();
+        }
+
         // Re-queue a failed / cancelled run with the same spec. The old row
         // is left in place (as a terminal record) so history reads honestly;
         // a new JobRun is created and enqueued.

@@ -26,7 +26,7 @@ namespace RcloneMount.Models
         public string JobId { get; init; } = "";
         public string DisplayName { get; init; } = "";
 
-        public JobSpec Spec { get; init; } = new();
+        public JobSpec Spec { get; internal set; } = new(); // replaced only when a remote is renamed
 
         public JobRunState State { get; set; } = JobRunState.Queued;
 

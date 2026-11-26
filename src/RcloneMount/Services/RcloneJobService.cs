@@ -17,7 +17,7 @@ namespace RcloneMount.Services
 {
     public enum TransferOperation { Copy, Sync, Move, Check, CryptCheck, Bisync }
 
-    public sealed class JobSpec
+    public sealed record JobSpec
     {
         public TransferOperation Operation { get; init; }
         public string SourceRemote { get; init; } = "";
@@ -63,6 +63,12 @@ namespace RcloneMount.Services
         // Bisync only. Set true by the Initialise button — adds --resync.
         // Destructive; the dialog gates it behind an explicit confirmation.
         public bool Resync { get; init; }
+
+        internal JobSpec WithRemoteRenamed(string oldName, string newName) => this with
+        {
+            SourceRemote = SourceRemote == oldName ? newName : SourceRemote,
+            DestRemote = DestRemote == oldName ? newName : DestRemote,
+        };
 
         public bool IsCheck => Operation is TransferOperation.Check or TransferOperation.CryptCheck;
         public bool IsBisync => Operation is TransferOperation.Bisync;
@@ -288,6 +294,8 @@ namespace RcloneMount.Services
             var exitTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
             proc.Exited += (_, _) => exitTcs.TrySetResult(proc.ExitCode);
 
+            // Already cancelled: a launched rclone could delete files before the quit reaches it.
+            ct.ThrowIfCancellationRequested();
             if (!proc.Start())
                 throw new IOException("Failed to launch rclone job.");
             ChildJob.Attach(proc);

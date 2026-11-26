@@ -114,4 +114,14 @@ public class JobLastRunTests
         Assert.Equal("Failed to start", run.Outcome);
         Assert.NotNull(run.StartedUtc);
     }
+
+    // Cancelled (e.g. its job was deleted) before rclone was launched: it must not touch any file.
+    [Fact]
+    public async Task RunAsync_CancelledBeforeLaunch_NeverStartsRclone()
+    {
+        var service = new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunAsync(
+            new JobSpec { SourcePath = "s", DestPath = "d" }, new Progress<JobProgress>(), new CancellationToken(canceled: true)));
+    }
 }

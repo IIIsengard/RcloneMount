@@ -593,11 +593,14 @@ namespace RcloneMount
         {
             var open = OpenDialogFor(job.Id);
             var message = $"Delete saved job '{(string.IsNullOrWhiteSpace(job.Name) ? "(unnamed)" : job.Name)}'?"
-                + (open is null ? "" : "\nIts open window will close and unsaved changes there are lost.");
+                + (open is null ? "" : "\nIts open window will close and unsaved changes there are lost.")
+                + (jobQueue?.Snapshot().Any(r => r.JobId == job.Id && r.IsActive) == true
+                    ? "\nIts queued or running transfer will be cancelled." : "");
             if ((confirmJobDelete?.Invoke(message) ?? ConfirmDialog.Show(this, "Delete job", message)) != DialogResult.Yes)
                 return;
             open?.Close(); // left open, its Update button would add the job back
             jobs.RemoveAll(j => j.Id == job.Id);
+            jobQueue?.CancelJob(job.Id); // asked again here: a run may have been queued while the box was up
             await SaveSettingsAsync();
             RefreshJobsList();
         }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace RcloneMount.Models
 {
@@ -7,6 +8,11 @@ namespace RcloneMount.Models
         public string Name { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty;
         public Dictionary<string, string> Parameters { get; set; } = new();
+
+        // The same list, in the same order, with one remote under its new name.
+        internal static RcloneRemote[] Renamed(IEnumerable<RcloneRemote> remotes, string oldName, string newName) =>
+            remotes.Select(r => r.Name != oldName ? r
+                : new RcloneRemote { Name = newName, Type = r.Type, Parameters = r.Parameters }).ToArray();
 
         // Why rclone cannot use this remote name on Windows; null when it can. rclone reads a
         // one-letter name as a drive ("q:" is Q:), even when a remote of that name exists.

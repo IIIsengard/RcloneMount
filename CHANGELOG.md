@@ -44,6 +44,11 @@ changes (e.g. `settings.json` shape changes that need a migration).
   mount or connection test used the local drive instead of the remote. Jobs, mounts and tests
   now ask you to rename the remote, and new or renamed remotes need two or more characters.
 - **Deleting a job closes its open window**, so Update there can no longer bring the job back.
+- **Deleting a job cancels its queued and running transfers.** A sync or move could still run
+  after the job was gone. The confirmation says so.
+- **Renaming a remote updates saved jobs**, queued transfers and open transfer windows, not
+  only mounts.
+- **Deleting a remote names the saved jobs that use it** before you confirm.
 - **Screen readers** now read the selected value of the app's drop-down lists.
 - **The transfer window no longer calls a remote missing when the remote list could not be
   read.** It tells you to refresh instead.

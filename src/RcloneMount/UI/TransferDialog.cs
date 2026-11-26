@@ -14,7 +14,7 @@ namespace RcloneMount.UI
     // QUEUE panel instead.
     public sealed class TransferDialog : Form
     {
-        private readonly IReadOnlyList<RcloneRemote> remotes;
+        private IReadOnlyList<RcloneRemote> remotes; // replaced only by RenameRemote
         // (spec, displayName, jobId). Nullable — a caller that hides Start
         // (e.g. an edit-only flow) can pass null.
         private readonly Action<JobSpec, string, string>? enqueueCallback;
@@ -122,7 +122,7 @@ namespace RcloneMount.UI
             cbSourceRemote = new ThemedDropDown { Location = new Point(140, 52), Width = 200 };
             cbSourceRemote.AddItem("(Local disk)");
             foreach (var r in remotes)
-                cbSourceRemote.AddItem($"{r.Name} ({ProviderVisuals.FriendlyType(r.Type)})");
+                cbSourceRemote.AddItem(RemoteItem(r));
             seedSourceName = existingJob?.SourceRemote ?? sourceRemote ?? "";
             cbSourceRemote.SelectedIndex = IndexOfRemote(seedSourceName);
 
@@ -170,7 +170,7 @@ namespace RcloneMount.UI
             cbDestRemote = new ThemedDropDown { Location = new Point(140, 162), Width = 200 };
             cbDestRemote.AddItem("(Local disk)");
             foreach (var r in remotes)
-                cbDestRemote.AddItem($"{r.Name} ({ProviderVisuals.FriendlyType(r.Type)})");
+                cbDestRemote.AddItem(RemoteItem(r));
             seedDestName = existingJob?.DestRemote ?? "";
             cbDestRemote.SelectedIndex = existingJob is not null ? IndexOfRemote(seedDestName)
                 : remotes.Count > 0 ? 1 : LocalRemoteIndex;
@@ -311,6 +311,18 @@ namespace RcloneMount.UI
             ShowScheduleError();
 
             if (existingJob is not null) savedInputs = InputSnapshot();
+        }
+
+        private static string RemoteItem(RcloneRemote r) => $"{r.Name} ({ProviderVisuals.FriendlyType(r.Type)})";
+
+        // The app renamed a remote while this window is open: the selections stay, their name changes.
+        internal void RenameRemote(string oldName, string newName)
+        {
+            remotes = RcloneRemote.Renamed(remotes, oldName, newName);
+            for (var i = 0; i < remotes.Count; i++)
+                cbSourceRemote.Items[i + 1] = cbDestRemote.Items[i + 1] = RemoteItem(remotes[i]);
+            cbSourceRemote.Invalidate();
+            cbDestRemote.Invalidate();
         }
 
         // -1 (nothing selected) for a name that is not in the list: never substitute another remote.

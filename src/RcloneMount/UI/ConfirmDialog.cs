@@ -25,8 +25,14 @@ namespace RcloneMount.UI
             MinimizeBox = false;
             MaximizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(440, 168);
             KeyPreview = true;
+            const int width = 440, messageWidth = width - 96;
+            var messageFont = new Font(SystemFonts.MessageBoxFont!.FontFamily, 9.5f);
+            // Grow with the message (e.g. a list of job names) so none of it is cut off.
+            var needed = TextRenderer.MeasureText(message, messageFont, new Size(messageWidth, int.MaxValue),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height;
+            var messageHeight = Math.Max(80, needed + 8);
+            ClientSize = new Size(width, messageHeight + 88);
 
             var iconPanel = new Panel
             {
@@ -41,8 +47,8 @@ namespace RcloneMount.UI
                 UseMnemonic = false,
                 Text = message,
                 Location = new Point(76, 22),
-                Size = new Size(ClientSize.Width - 96, 80),
-                Font = new Font(SystemFonts.MessageBoxFont!.FontFamily, 9.5f),
+                Size = new Size(messageWidth, messageHeight),
+                Font = messageFont,
                 ForeColor = Theme.TextPrimary,
                 BackColor = Color.Transparent,
                 AutoEllipsis = false,

@@ -412,11 +412,7 @@ namespace RcloneMount
                     SetStatus($"Renaming {oldName} → {newName}...");
                     await configService.RenameRemoteAsync(oldName, newName);
 
-                    var affected = mounts.Where(m => string.Equals(m.RemoteName, oldName, StringComparison.Ordinal)).ToList();
-                    foreach (var m in affected)
-                        m.RemoteName = newName;
-                    if (affected.Count > 0)
-                        await SaveSettingsAsync();
+                    await ApplyRemoteRenameAsync(oldName, newName);
                 }
 
                 SetStatus($"Updating remote {newName}...");
@@ -449,17 +445,56 @@ namespace RcloneMount
             }
         }
 
+        // Moves everything that names a remote to its new name: mounts, saved jobs, queued runs and
+        // open transfer windows. Whatever kept the old name would fail, or reach a later remote reusing it.
+        private async Task ApplyRemoteRenameAsync(string oldName, string newName)
+        {
+            var changed = false;
+            foreach (var m in mounts.Where(m => m.RemoteName == oldName))
+            {
+                m.RemoteName = newName;
+                changed = true;
+            }
+            foreach (var job in jobs.Where(j => j.SourceRemote == oldName || j.DestRemote == oldName))
+            {
+                if (job.SourceRemote == oldName) job.SourceRemote = newName;
+                if (job.DestRemote == oldName) job.DestRemote = newName;
+                changed = true;
+            }
+            // A window opened before the next refresh must already see the new name.
+            remotes = RcloneRemote.Renamed(remotes, oldName, newName);
+            jobQueue?.RenameRemote(oldName, newName);
+            foreach (var dialog in OwnedForms.OfType<TransferDialog>())
+                dialog.RenameRemote(oldName, newName);
+            RefreshJobsList();
+            if (changed)
+                await SaveSettingsAsync();
+        }
+
+        private const int NamedJobsCap = 10; // keeps the confirmation box on screen
+
+        internal static string DeleteRemoteMessage(string name, IReadOnlyList<Mount> mounts, IReadOnlyList<TransferJob> jobs)
+        {
+            var inUse = mounts.Any(m => string.Equals(m.RemoteName, name, StringComparison.Ordinal));
+            var extra = inUse ? "\n\nWarning: mounts reference this remote and will stop working." : "";
+            var users = jobs.Where(j => j.SourceRemote == name || j.DestRemote == name)
+                .Select(j => "  • " + (string.IsNullOrWhiteSpace(j.Name) ? "(unnamed)" : j.Name)).ToList();
+            if (users.Count > 0)
+            {
+                extra += "\n\nThese saved jobs use it and will stop working:\n" + string.Join("\n", users.Take(NamedJobsCap));
+                if (users.Count > NamedJobsCap) extra += $"\n  and {users.Count - NamedJobsCap} more";
+            }
+            return $"Delete remote '{name}' from rclone.conf?{extra}";
+        }
+
         private async void BtnDeleteRemote_Click(object? sender, EventArgs e)
         {
             if (configService is null) return;
             var selected = GetSelectedRemote();
             if (selected is null) return;
 
-            var inUse = mounts.Any(m => string.Equals(m.RemoteName, selected.Name, StringComparison.Ordinal));
-            var extra = inUse ? "\n\nWarning: mounts reference this remote and will stop working." : "";
-
             if (ConfirmDialog.Show(this, "Delete service",
-                    $"Delete remote '{selected.Name}' from rclone.conf?{extra}",
+                    DeleteRemoteMessage(selected.Name, mounts, jobs),
                     confirmText: "Delete") != DialogResult.Yes)
                 return;
             if (!await UploadsGuardAsync(mounts.Where(m => string.Equals(m.RemoteName, selected.Name, StringComparison.Ordinal)),

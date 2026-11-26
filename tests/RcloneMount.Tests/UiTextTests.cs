@@ -377,6 +377,149 @@ public class UiTextTests
         Assert.DoesNotContain("window", asked);
     });
 
+    // Saved jobs, queued runs and open windows name remotes too: all must follow a rename.
+    [Fact]
+    public void RenamingARemote_MovesJobsQueuedRunsAndOpenWindowsToTheNewName() => Sta(() =>
+    {
+        var form = Shell();
+        var remotes = new[] { new RcloneRemote { Name = "r", Type = "mega" }, new RcloneRemote { Name = "other", Type = "mega" } };
+        Set(form, "remotes", remotes);
+        Set(form, "configuredDriveLetters", new Dictionary<string, string>());
+        var mount = new Mount { RemoteName = "r" };
+        ((List<Mount>)Get(form, "mounts")!).Add(mount);
+        var jobs = (List<TransferJob>)Get(form, "jobs")!;
+        var job = SavedJob(); // r to r
+        var destOnly = new TransferJob { Id = "b", SourceRemote = "", DestRemote = "r" };
+        var unrelated = new TransferJob { Id = "c", SourceRemote = "other", DestRemote = "R" };
+        jobs.AddRange(new[] { job, destOnly, unrelated });
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        queue.Enqueue(new JobSpec { SourceRemote = "r", SourcePath = "s", DestRemote = "other", DryRun = true, BwLimit = "1M" }, "queued", "a");
+        var started = new List<(JobSpec spec, string id)>();
+        var saved = new List<TransferJob>();
+        using var open = new TransferDialog(remotes, (spec, _, id) => started.Add((spec, id)), "r", "s",
+            saveCallback: saved.Add, existingJob: job);
+        open.Owner = form;
+
+        WithoutSaving(() => Call(form, "ApplyRemoteRenameAsync", "r", "new"));
+
+        Assert.Equal("new", mount.RemoteName);
+        Assert.Equal(("new", "new"), (job.SourceRemote, job.DestRemote));
+        Assert.Equal(("", "new"), (destOnly.SourceRemote, destOnly.DestRemote));
+        Assert.Equal(("other", "R"), (unrelated.SourceRemote, unrelated.DestRemote));
+        var run = Assert.Single(queue.Snapshot()).Spec;
+        Assert.Equal(("new", "other", "s", true, "1M"), (run.SourceRemote, run.DestRemote, run.SourcePath, run.DryRun, run.BwLimit));
+        Assert.Equal(new[] { "new", "other" }, ((IReadOnlyList<RcloneRemote>)Get(form, "remotes")!).Select(x => x.Name));
+        Assert.StartsWith("new (", ((ThemedDropDown)Of(open, "cbSourceRemote")).SelectedText);
+        Invoke(open, "StartAndClose", false);
+        Invoke(open, "SaveJob");
+        Assert.Equal(("new", "new", "a"), (started[0].spec.SourceRemote, started[0].spec.DestRemote, started[0].id));
+        Assert.Equal(("new", "new"), (saved[0].SourceRemote, saved[0].DestRemote));
+    });
+
+    [Fact]
+    public void DeleteRemoteMessage_NamesTheSavedJobsThatUseIt()
+    {
+        var jobs = new List<TransferJob>
+        {
+            new() { Name = "from it", SourceRemote = "r" },
+            new() { Name = "to it", DestRemote = "r" },
+            new() { Name = "", DestRemote = "r" },
+            new() { Name = "elsewhere", SourceRemote = "R", DestRemote = "other" },
+        };
+
+        var message = MainForm.DeleteRemoteMessage("r", Array.Empty<Mount>(), jobs);
+
+        Assert.Contains("from it", message);
+        Assert.Contains("to it", message);
+        Assert.Contains("(unnamed)", message);
+        Assert.DoesNotContain("elsewhere", message);
+        Assert.DoesNotContain("job", MainForm.DeleteRemoteMessage("unused", Array.Empty<Mount>(), jobs));
+    }
+
+    [Fact]
+    public void DeleteRemoteMessage_CapsALongJobList()
+    {
+        var jobs = Enumerable.Range(1, 25).Select(i => new TransferJob { Name = $"job-{i:00}", DestRemote = "r" }).ToList();
+
+        var message = MainForm.DeleteRemoteMessage("r", Array.Empty<Mount>(), jobs);
+
+        Assert.Contains("job-10", message);
+        Assert.DoesNotContain("job-11", message);
+        Assert.Contains("15 more", message);
+    }
+
+    // A list of job names must not be cut off at the bottom of the box.
+    [Fact]
+    public void ConfirmDialog_GrowsToFitItsMessage() => Sta(() =>
+    {
+        var message = string.Join("\n", Enumerable.Range(1, 14).Select(i => $"line {i}"));
+        using var dialog = (Form)Activator.CreateInstance(typeof(ConfirmDialog), Private, null,
+            new object[] { "title", message, "Remove", "Cancel", true }, null)!;
+
+        var label = All<Label>(dialog).Single();
+
+        Assert.True(label.Height >= label.GetPreferredSize(new Size(label.Width, 0)).Height, $"label {label.Height}");
+        Assert.All(All<Button>(dialog), b => Assert.True(b.Top >= label.Bottom && b.Bottom <= dialog.ClientSize.Height, b.Text));
+    });
+
+    [Theory]
+    [InlineData(DialogResult.Yes)]
+    [InlineData(DialogResult.No)]
+    public void DeletingAJob_SaysItsRunsWillBeCancelled_AndCancelsThemOnlyOnYes(DialogResult answer) => Sta(() =>
+    {
+        var form = Shell();
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        var running = queue.Enqueue(new JobSpec(), "running", "a");
+        using var cts = new CancellationTokenSource();
+        running.State = JobRunState.Running;
+        running.Cts = cts;
+        var queued = queue.Enqueue(new JobSpec(), "queued", "a");
+        var otherJob = queue.Enqueue(new JobSpec(), "other job", "b");
+        var adHoc = queue.Enqueue(new JobSpec(), "ad hoc");
+        var asked = "";
+        Set(form, "confirmJobDelete", new Func<string, DialogResult>(message => { asked = message; return answer; }));
+
+        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+
+        Assert.Contains("cancelled", asked);
+        var deleted = answer == DialogResult.Yes;
+        Assert.Equal(deleted, cts.IsCancellationRequested);
+        Assert.Equal(deleted ? JobRunState.Cancelled : JobRunState.Queued, queued.State);
+        Assert.Equal(JobRunState.Queued, otherJob.State);
+        Assert.Equal(JobRunState.Queued, adHoc.State);
+    });
+
+    // A run can start while the confirmation is on screen (the scheduler's timer still ticks).
+    [Fact]
+    public void DeletingAJob_AlsoCancelsARunQueuedWhileAsking() => Sta(() =>
+    {
+        var form = Shell();
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        JobRun? late = null;
+        var asked = "";
+        Set(form, "confirmJobDelete", new Func<string, DialogResult>(message =>
+        {
+            asked = message;
+            late = queue.Enqueue(new JobSpec(), "scheduled", "a");
+            return DialogResult.Yes;
+        }));
+
+        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+
+        Assert.DoesNotContain("cancelled", asked); // nothing was running when asked
+        Assert.Equal(JobRunState.Cancelled, late!.State);
+    });
+
+    // Never starts anything, so queued runs stay queued.
+    private static JobQueueService IdleQueue() => new(new RcloneJobService("unused.exe")) { MaxConcurrent = 0 };
+
     // "Not in your rclone config" is only true when the config was read.
     [Fact]
     public void TransferDialog_RemoteListUnread_DoesNotSayTheRemoteIsGone() => Sta(() =>
