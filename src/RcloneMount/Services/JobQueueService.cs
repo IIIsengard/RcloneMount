@@ -35,8 +35,8 @@ namespace RcloneMount.Services
         // fires from whatever thread happens to hold the gate at the time.
         public event Action? RunsChanged;
 
-        // Fires once when a run has ended after rclone actually ran (any exit code, or cancelled):
-        // files may have changed even when it failed part-way. Not fired when rclone failed to start.
+        // Fires once when a started run has ended (any exit code, cancelled, or failed to start):
+        // files may have changed even when it failed part-way. The run may already be trimmed from Snapshot().
         public event Action<JobRun>? RunFinished;
 
         public JobQueueService(RcloneJobService jobService, ActivityLog? activityLog = null)
@@ -206,7 +206,7 @@ namespace RcloneMount.Services
                 TrimTerminal_NoLock();
             }
             RunsChanged?.Invoke();
-            if (result is not null) RunFinished?.Invoke(run);
+            RunFinished?.Invoke(run);
 
             // Diagnostic: a "successful" run that moved zero bytes is either a
             // genuine no-op or a hang the completion detector cut short. Dump

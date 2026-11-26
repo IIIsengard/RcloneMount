@@ -332,7 +332,6 @@ namespace RcloneMount
                 {
                     RefreshActiveList();
                     NotifyNewFailures();
-                    SaveLastRuns();
                     UpdatePowerGuard();
                 }));
             }
@@ -356,20 +355,29 @@ namespace RcloneMount
         }
 
         private readonly HashSet<string> lastRunRecorded = new(StringComparer.Ordinal);
-        private void SaveLastRuns()
+        // Takes the run from RunFinished: a Snapshot() read later may have trimmed it already.
+        private void SaveLastRun(Models.JobRun run)
         {
-            if (jobQueue is null || !RecordLastRuns(jobs, jobQueue.Snapshot(), lastRunRecorded)) return;
+            if (!RecordLastRuns(jobs, new[] { run }, lastRunRecorded)) return;
             _ = SaveSettingsAsync();
             RefreshJobsList();
         }
 
-        // After a job ends, make any mount of the remote it wrote to re-list that folder
-        // (vfs/refresh), so new files show up without waiting for the long dir-cache to expire.
+        // After a job ends, record it on its saved job, and make any mount of the remote it wrote to
+        // re-list that folder (vfs/refresh), so new files show up without waiting for the long
+        // dir-cache to expire.
         // Runs on the UI thread because `mounts` is only touched there.
         private void OnJobRunFinished(JobRun run)
         {
             if (IsDisposed || !IsHandleCreated) return;
-            try { BeginInvoke(new Action(() => _ = RefreshMountsAfterJobAsync(run))); }
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    SaveLastRun(run);
+                    _ = RefreshMountsAfterJobAsync(run);
+                }));
+            }
             catch (InvalidOperationException) { /* handle disposed mid-invoke */ }
         }
 

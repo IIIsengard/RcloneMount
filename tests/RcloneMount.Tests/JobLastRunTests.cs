@@ -1,4 +1,5 @@
 using RcloneMount.Models;
+using RcloneMount.Services;
 
 namespace RcloneMount.Tests;
 
@@ -97,5 +98,20 @@ public class JobLastRunTests
 
         Assert.False(MainForm.RecordLastRuns(new List<TransferJob> { job }, new[] { Run("a", JobRunState.Failed) }, new HashSet<string>()));
         Assert.Equal("Success", job.LastResultKind);
+    }
+
+    // The UI records from this event, so it must fire even when rclone cannot be started.
+    [Fact]
+    public async Task RunFinished_FiresForARunThatFailedToStart()
+    {
+        var queue = new JobQueueService(new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe")));
+        var finished = new TaskCompletionSource<JobRun>();
+        queue.RunFinished += finished.SetResult;
+
+        var run = queue.Enqueue(new JobSpec { SourcePath = "s", DestPath = "d" }, "cannot-start", "a");
+
+        Assert.Same(run, await finished.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("Failed to start", run.Outcome);
+        Assert.NotNull(run.StartedUtc);
     }
 }

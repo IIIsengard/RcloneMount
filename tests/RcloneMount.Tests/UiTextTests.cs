@@ -164,6 +164,139 @@ public class UiTextTests
         Assert.Equal(new[] { saved[0] }, started);
     });
 
+    // A run of an edited, unsaved dialog is not a run of the saved job.
+    [Theory]
+    [InlineData("cbOp")]
+    [InlineData("cbSourceRemote")]
+    [InlineData("txtSourcePath")]
+    [InlineData("cbDestRemote")]
+    [InlineData("txtDestPath")]
+    [InlineData("chkDryRun")]
+    [InlineData("chkServerSide")]
+    [InlineData("chkOneWay")]
+    [InlineData("chkSizeOnly")]
+    [InlineData("cbConflict")]
+    [InlineData("chkCheckAccess")]
+    [InlineData("txtMaxDelete")]
+    [InlineData("txtBwLimit")]
+    [InlineData("txtExtraFlags")]
+    [InlineData(nameof(FilterRules.PatternsText))]
+    [InlineData(nameof(FilterRules.MinSize))]
+    [InlineData(nameof(FilterRules.MaxSize))]
+    [InlineData(nameof(FilterRules.MinAge))]
+    [InlineData(nameof(FilterRules.MaxAge))]
+    public void TransferDialog_ChangedButNotSaved_IsNotCreditedUntilSaved(string input) => Sta(() =>
+    {
+        var started = new List<string>();
+        using var dialog = SavedJobDialog(SavedJob(), started);
+
+        // Capitalised names are filter fields; the rest are the dialog's controls.
+        switch (Of(dialog, char.IsUpper(input[0]) ? "filters" : input))
+        {
+            case ThemedDropDown drop: drop.SelectedIndex = input.EndsWith("Remote") ? 0 : 1; break; // 0 = local disk
+            case CheckBox box: box.Checked = !box.Checked; break;
+            case TextBox text: text.Text = "7"; break;
+            case var filters: typeof(FilterRules).GetProperty(input)!.SetValue(filters, "7"); break;
+        }
+
+        Invoke(dialog, "StartAndClose", false); // dry-run stays ticked for Sync/Move, so no confirm box
+        Invoke(dialog, "SaveJob");
+        Invoke(dialog, "StartAndClose", false);
+
+        Assert.Equal(new[] { "", "a" }, started);
+    });
+
+    [Fact]
+    public void TransferDialog_OnlyNameAndScheduleChanged_IsStillCredited() => Sta(() =>
+    {
+        var started = new List<string>();
+        using var dialog = SavedJobDialog(SavedJob(), started);
+        ((TextBox)Of(dialog, "txtName")).Text = "renamed";
+        ((TextBox)Of(dialog, "txtSchedule")).Text = "daily 03:00";
+
+        Invoke(dialog, "StartAndClose", false);
+
+        Assert.Equal(new[] { "a" }, started);
+    });
+
+    // The dialog falls back to another remote when the saved one no longer exists.
+    [Theory]
+    [InlineData("gone", "r")]
+    [InlineData("r", "gone")]
+    public void TransferDialog_SavedRemoteMissing_IsNotCreditedUntilSaved(string source, string dest) => Sta(() =>
+    {
+        var started = new List<string>();
+        var job = SavedJob();
+        job.SourceRemote = source;
+        job.DestRemote = dest;
+        using var dialog = SavedJobDialog(job, started);
+
+        Invoke(dialog, "StartAndClose", false);
+        Invoke(dialog, "SaveJob");
+        Invoke(dialog, "StartAndClose", false);
+
+        Assert.Equal(new[] { "", "a" }, started);
+    });
+
+    // A run can leave the queue (finished-row cap) before the UI thread gets to it.
+    [Fact]
+    public void FinishedRunNoLongerInTheQueue_IsStillRecorded_Once() => Sta(() =>
+    {
+        var form = Shell();
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        Set(form, "lastRunRecorded", new HashSet<string>()); // field initializers did not run
+        var done = DateTime.UtcNow;
+        var run = new JobRun
+        {
+            Spec = new JobSpec(), JobId = "a", State = JobRunState.Failed, Outcome = "Failed to start",
+            StartedUtc = done.AddSeconds(-1), FinishedUtc = done,
+        };
+        // Recording saves settings: make that a no-op so the real settings.json is never written.
+        var readError = typeof(SettingsService).GetProperty(nameof(SettingsService.LoadReadError))!;
+        readError.SetValue(null, "test: do not save");
+        try
+        {
+            _ = form.Handle;
+            Call(form, "OnJobRunFinished", run);
+            Assert.Null(job.LastRunUtc); // posted to the UI thread, not done on the caller's
+            Application.DoEvents();
+            Assert.Equal(done, job.LastRunUtc);
+            Assert.Equal("Failed to start", job.LastResultKind);
+
+            job.LastRunUtc = null;
+            Call(form, "OnJobRunFinished", run);
+            Application.DoEvents();
+            Assert.Null(job.LastRunUtc);
+        }
+        finally
+        {
+            readError.SetValue(null, null);
+            typeof(Control).GetMethod("DestroyHandle", Private)!.Invoke(form, null);
+        }
+    });
+
+    private static TransferJob SavedJob() => new()
+    {
+        Id = "a", Name = "nightly", Operation = "Copy",
+        SourceRemote = "r", SourcePath = "s", DestRemote = "r", DestPath = "d", DryRun = true,
+    };
+
+    private static TransferDialog SavedJobDialog(TransferJob job, List<string> started) =>
+        new(new[] { new RcloneRemote { Name = "r", Type = "mega" } },
+            (spec, _, id) =>
+            {
+                if (spec.CleanupTempFile is { } filterFile) File.Delete(filterFile);
+                started.Add(id);
+            },
+            job.SourceRemote, job.SourcePath, saveCallback: _ => { }, existingJob: job);
+
+    private static object Of(TransferDialog dialog, string field) =>
+        typeof(TransferDialog).GetField(field, Private)!.GetValue(dialog)!;
+
+    private static void Invoke(TransferDialog dialog, string name, params object[] args) =>
+        typeof(TransferDialog).GetMethod(name, Private)!.Invoke(dialog, args);
+
     [Fact]
     public void HistoryItems_AreAnnouncedWithNameDirectionSizeAndTime() => Sta(() =>
     {

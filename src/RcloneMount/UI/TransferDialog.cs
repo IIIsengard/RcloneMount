@@ -64,6 +64,8 @@ namespace RcloneMount.UI
         // saved job — used so Save updates the same record instead of creating a
         // duplicate, and so the enqueued run reports back with the right JobId.
         private string? editingJobId;
+        // InputSnapshot() as of the last load or Save; a run is credited to the job only while it still matches.
+        private object? savedInputs;
 
         public TransferDialog(
             IReadOnlyList<RcloneRemote> remotes,
@@ -315,7 +317,20 @@ namespace RcloneMount.UI
             cbDestRemote.SelectedIndexChanged += (_, _) => SyncOptionVisibility();
             SyncOptionVisibility();
             ShowScheduleError();
+
+            // A saved remote that no longer exists leaves another one selected: that is not the saved job.
+            if (existingJob is not null
+                && ResolveRemoteName(cbSourceRemote) == existingJob.SourceRemote
+                && ResolveRemoteName(cbDestRemote) == existingJob.DestRemote)
+                savedInputs = InputSnapshot();
         }
+
+        // Every input that changes what rclone does. Name, schedule and the resync button do not.
+        private object InputSnapshot() => (
+            (cbOp.SelectedIndex, cbSourceRemote.SelectedIndex, txtSourcePath.Text, cbDestRemote.SelectedIndex, txtDestPath.Text),
+            (chkDryRun.Checked, chkServerSide.Checked, chkOneWay.Checked, chkSizeOnly.Checked),
+            (cbConflict.SelectedIndex, chkCheckAccess.Checked, txtMaxDelete.Text, txtBwLimit.Text, txtExtraFlags.Text),
+            (filters.PatternsText, filters.MinSize, filters.MaxSize, filters.MinAge, filters.MaxAge));
 
         // Inline error under the Schedule box; set after DialogTheme.Apply so the colour sticks.
         private string? ShowScheduleError()
@@ -454,7 +469,7 @@ namespace RcloneMount.UI
             if (displayName.Length == 0)
                 displayName = op.ToString() + ": " + FormatSpec(sourceRemote, sourcePath) + " → " + FormatSpec(destRemote, txtDestPath.Text ?? "");
 
-            enqueueCallback(spec, displayName, editingJobId ?? "");
+            enqueueCallback(spec, displayName, InputSnapshot().Equals(savedInputs) ? editingJobId ?? "" : "");
             Close();
         }
 
@@ -526,6 +541,7 @@ namespace RcloneMount.UI
             };
             saveCallback(job);
             editingJobId = job.Id; // a second Save updates this job, and Start reports back to it
+            savedInputs = InputSnapshot();
             btnSave.Text = "Saved";
             var reenable = new System.Windows.Forms.Timer { Interval = 1200 };
             reenable.Tick += (_, _) =>

@@ -34,6 +34,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
 ### Fixed
 - **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
   jobs started by hand stayed on "never run".
+- **"Last run" only counts runs of the job as saved.** Starting a saved job after changing
+  its settings without saving, or after its remote was removed, no longer marks that job as
+  run. Runs are also no longer missed when many jobs finish at once or rclone fails to start.
 - **Saving a new job twice no longer creates a duplicate.**
 - **`&` shows in names and headings.** "US & Canada" and "Startup & Updates" lost the `&`.
 - **Local paths in job rows** no longer start with a stray `:`.
