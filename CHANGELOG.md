@@ -32,6 +32,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **Changes made in quick succession are saved correctly.** When two saves overlapped, the
+  settings file could get half-finished changes or the save could fail, and a mount running
+  on a temporary drive letter could show the wrong letter.
 - **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
   jobs started by hand stayed on "never run".
 - **Saving a new job twice no longer creates a duplicate.**

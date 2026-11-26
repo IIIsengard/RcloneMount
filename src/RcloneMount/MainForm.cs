@@ -833,7 +833,8 @@ namespace RcloneMount
             // Any mount currently running on a session-fallback letter has its
             // DriveLetter mutated to the letter it actually got. Serializing that would
             // silently overwrite the user's configured choice on disk, so briefly swap
-            // each such mount back to its original before we save and restore after.
+            // each such mount back to its original while SaveAsync takes its snapshot, and
+            // restore before the first await so an overlapping save never sees the swap.
             var swapped = new List<(Mount m, string live)>();
             foreach (var m in mounts)
             {
@@ -843,9 +844,10 @@ namespace RcloneMount
                     m.DriveLetter = original;
                 }
             }
+            Task save;
             try
             {
-                await SettingsService.SaveAsync(new AppSettings
+                save = SettingsService.SaveAsync(new AppSettings
                 {
                     RcloneExePath = savedRclonePath,
                     CheckForUpdatesOnStartup = checkForUpdatesOnStartup,
@@ -863,6 +865,7 @@ namespace RcloneMount
                 foreach (var (m, live) in swapped)
                     m.DriveLetter = live;
             }
+            await save;
         }
 
         // Tray balloon that honours the Notifications toggle. Callers should route

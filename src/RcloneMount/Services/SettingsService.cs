@@ -30,20 +30,21 @@ namespace RcloneMount.Services
         private const string LegacyAppFolderName = "MegaCloudDrive";
         private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-        private static string SettingsFilePath => Path.Combine(
+        // Tests redirect these so they never touch the user's files. The activity log, the
+        // default backups folder and the legacy settings file all follow PathOverride.
+        internal static string? PathOverride { get; set; }
+        internal static string? RcloneConfigPathOverride { get; set; }
+
+        private static string SettingsFilePath => PathOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             AppFolderName,
             "settings.json");
 
-        public static string ActivityLogPath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            AppFolderName,
-            "activity.log");
+        private static string DataFolder => Path.GetDirectoryName(SettingsFilePath)!;
 
-        public static string DefaultBackupsFolder => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            AppFolderName,
-            "backups");
+        public static string ActivityLogPath => Path.Combine(DataFolder, "activity.log");
+
+        public static string DefaultBackupsFolder => Path.Combine(DataFolder, "backups");
 
         // Runtime backup location. Kept in sync with AppSettings.BackupsFolderOverride
         // via LoadAsync/LoadSync/SaveAsync — those are the only writers.
@@ -63,7 +64,7 @@ namespace RcloneMount.Services
 
         // rclone's default config location. Used only as a fallback when we can't ask
         // rclone itself where its config lives (e.g. exe not detected yet).
-        public static string DefaultRcloneConfigPath => Path.Combine(
+        public static string DefaultRcloneConfigPath => RcloneConfigPathOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "rclone",
             "rclone.conf");
@@ -128,7 +129,7 @@ namespace RcloneMount.Services
         }
 
         private static string LegacySettingsFilePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Path.GetDirectoryName(DataFolder)!,
             LegacyAppFolderName,
             "settings.json");
 
@@ -206,20 +207,40 @@ namespace RcloneMount.Services
         public static async Task SaveAsync(AppSettings settings)
         {
             if (LoadReadError is not null) return; // see LoadReadError
+            // The argument is evaluated before the first await, on the caller's thread.
+            await WriteSnapshotAsync(TakeSnapshot(settings)).ConfigureAwait(false);
+        }
+
+        internal sealed record Snapshot(long Order, string Json, string? BackupsFolderOverride);
+
+        private static long snapshotsTaken;
+        private static long newestWritten; // only touched while holding saveGate
+
+        // The caller keeps editing the same Mounts/Jobs lists, so copy everything a save needs now.
+        internal static Snapshot TakeSnapshot(AppSettings settings) => new(
+            System.Threading.Interlocked.Increment(ref snapshotsTaken),
+            JsonSerializer.Serialize(settings, JsonOptions),
+            settings.BackupsFolderOverride);
+
+        internal static async Task WriteSnapshotAsync(Snapshot snapshot)
+        {
             await saveGate.WaitAsync().ConfigureAwait(false);
             try
             {
+            // SemaphoreSlim promises no FIFO order: never replace a newer snapshot with an older one.
+            if (snapshot.Order < newestWritten) return;
+
             // Keep the runtime override in sync with what's about to hit disk so the
             // BackupsFolder used a moment later reflects the new choice.
-            backupsFolderOverride = settings.BackupsFolderOverride;
+            backupsFolderOverride = snapshot.BackupsFolderOverride;
 
             var directory = Path.GetDirectoryName(SettingsFilePath);
             if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
-            // Serialize once so we can (a) content-hash it against the previous file to
-            // decide whether to snapshot a backup, and (b) atomically overwrite.
-            var json = JsonSerializer.Serialize(settings, JsonOptions);
+            // Serialized once (in TakeSnapshot) so we can (a) content-hash it against the previous
+            // file to decide whether to snapshot a backup, and (b) atomically overwrite.
+            var json = snapshot.Json;
 
             var changed = true;
             try
@@ -238,6 +259,7 @@ namespace RcloneMount.Services
             }
 
             WriteAtomic(SettingsFilePath, json);
+            newestWritten = snapshot.Order;
 
             if (changed)
                 TrimBackups();
