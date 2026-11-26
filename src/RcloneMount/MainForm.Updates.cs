@@ -136,6 +136,7 @@ namespace RcloneMount
             catch (Exception ex)
             {
                 SetStatus($"Auto-update failed: {ex.Message}");
+                activityLog.Error($"Auto-update failed: {ex.Message}");
             }
             finally
             {
