@@ -30,6 +30,9 @@ namespace RcloneMount.Services
 
         public int MaxConcurrent { get; set; } = 1;
 
+        // Awaited just before a run starts rclone; throwing fails the run instead. Called off the UI thread.
+        internal Func<JobRun, Task>? CheckBeforeRun { get; set; }
+
         // Fires on any change to the runs list — added, state flip, removed.
         // Handlers should marshal to the UI thread themselves; the queue
         // fires from whatever thread happens to hold the gate at the time.
@@ -196,6 +199,7 @@ namespace RcloneMount.Services
             Exception? error = null;
             try
             {
+                if (CheckBeforeRun is { } check) await check(run).ConfigureAwait(false);
                 result = await jobService.RunAsync(run.Spec, progress, run.Cts!.Token, run.DisplayName).ConfigureAwait(false);
             }
             catch (Exception ex)

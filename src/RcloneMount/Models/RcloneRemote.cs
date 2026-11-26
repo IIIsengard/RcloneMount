@@ -23,6 +23,21 @@ namespace RcloneMount.Models
         internal static string? DeletedError(string remote) =>
             DeletedName(remote) is { } name ? $"Remote \"{name}\" was deleted. Edit the job and pick a remote." : null;
 
+        // True when `remote` names a configured remote that `read` lacks. Not local disk, a deleted mark
+        // or an on-the-fly ":backend:".
+        internal static bool IsMissing(string remote, IEnumerable<RcloneRemote> read)
+        {
+            if (string.IsNullOrEmpty(remote) || remote[0] == ':' || DeletedName(remote) is not null) return false;
+            var name = remote.Split(',')[0]; // "name,option=x" overrides settings of "name"
+            // `config dump` leaves out remotes defined only by environment variables, which rclone inherits from us.
+            return !read.Any(r => r.Name == name)
+                && string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable($"RCLONE_CONFIG_{name.ToUpperInvariant()}_TYPE"));
+        }
+
+        // Extra flags that point rclone at another config file, whose remotes the app does not read.
+        internal static bool UsesOwnConfig(IEnumerable<string> flags) =>
+            flags.Any(f => f == "--config" || f.StartsWith("--config=", System.StringComparison.Ordinal));
+
         // The same list, in the same order, with one remote under its new name.
         internal static RcloneRemote[] Renamed(IEnumerable<RcloneRemote> remotes, string oldName, string newName) =>
             remotes.Select(r => r.Name != oldName ? r

@@ -764,6 +764,230 @@ public class UiTextTests
         Assert.Equal("(unnamed), download, 0.0 B, 14:05, failed: quota", list.GetItemText(list.Items[1]));
     });
 
+    // A remote renamed or deleted outside the app must not leave its jobs free to reach a later one of that name.
+    [Fact]
+    public void Refresh_MarksJobsWhoseRemoteIsGone_AndSaysSoOnce() => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Dump("r"));
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        var job = SavedJob();
+        (job.SourceRemote, job.Schedule, job.InFlight) = ("gone", "daily 03:00", true);
+        var wrongCase = new TransferJob { Id = "b", Name = "upper", SourceRemote = "r,opt=1", DestRemote = "R" };
+        var untouched = new[]
+        {
+            new TransferJob { Id = "c", SourceRemote = "", SourcePath = @"C:\x", DestRemote = ":local" },
+            new TransferJob { Id = "d", SourceRemote = ":sftp,host=x", DestRemote = "r,opt=1" },
+            new TransferJob { Id = "e", SourceRemote = "elsewhere", ExtraFlags = "--config other.conf" },
+            new TransferJob { Id = "f", SourceRemote = "elsewhere2", ExtraFlags = "--config=other.conf" },
+        };
+        var before = untouched.Select(j => (j.SourceRemote, j.DestRemote)).ToArray();
+        ((List<TransferJob>)Get(form, "jobs")!).AddRange(untouched.Prepend(wrongCase).Prepend(job));
+        var queued = queue.Enqueue(new JobSpec { SourceRemote = "gone" }, "queued", "a");
+
+        Call(form, "RefreshRemotesAsync");
+        Call(form, "RefreshRemotesAsync");
+
+        Assert.Equal("gone", job.DeletedRemote());
+        Assert.Equal(("daily 03:00", false), (job.Schedule, job.InFlight));
+        Assert.Equal(("r,opt=1", "R"), (wrongCase.SourceRemote, RcloneRemote.DeletedName(wrongCase.DestRemote)));
+        Assert.Equal(before, untouched.Select(j => (j.SourceRemote, j.DestRemote)).ToArray());
+        Assert.Equal(JobRunState.Cancelled, queued.State);
+        var notice = Assert.Single(log, e => e.Level == ActivityLevel.Warn).Message;
+        Assert.Contains("nightly (\"gone\")", notice);
+        Assert.Contains("upper (\"R\")", notice);
+    });
+
+    // An unreadable or locked config says nothing; no remotes at all is more likely a wrong config path.
+    [Theory]
+    [InlineData("{}", "")]
+    [InlineData("", "")]
+    [InlineData("", "read tcp: failed")]
+    [InlineData("", "unable to decrypt configuration")]
+    [InlineData("not json", "")]
+    public void Refresh_MarksNothing_WithoutAListOfRemotes(string stdout, string stderr) => Sta(() =>
+    {
+        var (form, log) = RemoteShell(stdout, stderr);
+        Set(form, "unlockingConfig", true); // as if the password box were already up: none is shown here
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+
+        Call(form, "RefreshRemotesAsync");
+
+        Assert.Equal(("r", "r"), (job.SourceRemote, job.DestRemote));
+        Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
+    });
+
+    // A list read while the app renames or deletes a remote can disagree with the jobs for a moment.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)] // the change began and ended while rclone was reading
+    public void Refresh_MarksNothing_AcrossAnInAppRemoteChange(bool stillRunning) => Sta(() =>
+    {
+        var (form, _) = RemoteShell(Dump("other"));
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        if (stillRunning) Set(form, "remoteWritesActive", 1);
+
+        var refresh = (Task)typeof(MainForm).GetMethod("RefreshRemotesAsync", Private)!.Invoke(form, null)!;
+        if (!stillRunning) Set(form, "remoteWriteVersion", 1);
+        Finish(refresh);
+
+        Assert.Equal("r", job.SourceRemote);
+    });
+
+    // The check just before rclone starts.
+    [Theory]
+    [InlineData("{}", "", "has no remotes")]
+    [InlineData("", "boom", "boom")]
+    [InlineData("", "unable to decrypt configuration", "click Refresh")]
+    [InlineData(null, "", "rclone.exe was not found")]
+    public void RunCheck_RefusesWithoutMarking_WhenTheRemotesCannotBeConfirmed(string? stdout, string stderr, string says) => Sta(() =>
+    {
+        var (form, _) = RemoteShell(stdout ?? "", stderr);
+        if (stdout is null) Set(form, "configService", null!);
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+
+        var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { SourceRemote = "r" }));
+
+        Assert.StartsWith("Not run", error.Message);
+        Assert.Contains(says, error.Message);
+        Assert.Equal("r", job.SourceRemote);
+    });
+
+    [Fact]
+    public void RunCheck_PassesConfiguredRemotes_AndRefusesAMissingOneNoJobUses() => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Dump("r"));
+
+        RunCheck(form, new JobSpec { SourceRemote = "r", DestRemote = "r,opt=1" });
+        var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { DestRemote = "gone" }));
+
+        Assert.Contains("\"gone\" is not in", error.Message);
+        Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
+    });
+
+    // Nothing in these reads the app's config, so a locked or missing one must not stop them.
+    [Fact]
+    public void RunCheck_NeedsNoRemoteList_ForRunsThatUseNoConfiguredRemote() => Sta(() =>
+    {
+        var form = Shell(); // no rclone at all
+
+        RunCheck(form, new JobSpec { SourcePath = @"C:\a", DestPath = @"C:\b" });
+        RunCheck(form, new JobSpec { SourceRemote = ":local", DestRemote = RcloneRemote.MarkDeleted("x") });
+        RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--config", "other.conf" } });
+        WithEnvironment("RCLONE_CONFIG_FROM-ENV_TYPE", "local",
+            () => RunCheck(form, new JobSpec { SourceRemote = "From-Env", DestRemote = "from-env,opt=1" }));
+    });
+
+    // Scheduled and resumed runs both go through FireScheduledAsync and the queue: rclone must not start.
+    [Theory]
+    [InlineData("r", JobRunState.Cancelled, true)]
+    [InlineData(null, JobRunState.Failed, false)] // no remotes at all: refused, the job is kept
+    public void ScheduledRun_OfAJobWhoseRemoteIsGone_NeverStartsRclone(string? listed, JobRunState ends, bool marked) => Sta(() =>
+    {
+        var (form, log) = RemoteShell("");
+        var rclone = FakeRclone(listed is null ? "{}" : Dump(listed), "");
+        Set(form, "configService", new RcloneConfigService(rclone));
+        Set(form, "jobService", new RcloneJobService(rclone));
+        Set(form, "scheduledInFlight", new HashSet<string>()); // field initializers did not run
+        Set(form, "lastRunRecorded", new HashSet<string>());
+        Set(form, "failureNotified", new HashSet<string>());
+        _ = form.Handle;
+        Call(form, "NewQueueIfIdle");
+        var queue = (JobQueueService)Get(form, "jobQueue")!;
+        var job = SavedJob();
+        (job.SourceRemote, job.DryRun) = ("gone", false);
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+
+        Call(form, "FireScheduledAsync", job, null);
+        var run = Assert.Single(queue.Snapshot());
+        var inFlight = (HashSet<string>)Get(form, "scheduledInFlight")!;
+        PumpUntil(() => inFlight.Count == 0); // the scheduler saw the run end
+
+        Assert.Equal(ends, run.State);
+        Assert.Equal(marked ? "gone" : null, job.DeletedRemote());
+        if (!marked) Assert.StartsWith("Not run", run.LastError);
+        Assert.Single(log, e => e.Level == ActivityLevel.Warn); // the stopped jobs, or the failed run
+        Assert.All(File.ReadAllLines(Path.Combine(Path.GetDirectoryName(rclone)!, "calls.log")),
+            call => Assert.StartsWith("config dump", call));
+        typeof(Control).GetMethod("DestroyHandle", Private)!.Invoke(form, null);
+    });
+
+    // rclone's `config dump` leaves out remotes defined only by environment variables.
+    [Fact]
+    public void RealRclone_EnvironmentRemotes_AreNotTakenForMissing() => Sta(() =>
+    {
+        if (RealRclone.Exe is not { } exe) return;
+        var (form, _) = RemoteShell("");
+        Set(form, "configService", new RcloneConfigService(exe));
+        var conf = Path.Combine(Directory.CreateTempSubdirectory("rm-env-").FullName, "rclone.conf");
+        File.WriteAllText(conf, "[r]\ntype = local\n");
+        var env = new TransferJob { Id = "e", SourceRemote = "My-Env", DestRemote = "r" };
+        var gone = new TransferJob { Id = "g", SourceRemote = "gone" };
+        ((List<TransferJob>)Get(form, "jobs")!).AddRange(new[] { env, gone });
+
+        WithEnvironment("RCLONE_CONFIG", conf, () => WithEnvironment("RCLONE_CONFIG_MY-ENV_TYPE", "local", () =>
+        {
+            Call(form, "RefreshRemotesAsync");
+
+            Assert.Equal("r", Assert.Single((IReadOnlyList<RcloneRemote>)Get(form, "remotes")!).Name);
+            Assert.Equal("My-Env", env.SourceRemote);
+            Assert.Equal("gone", gone.DeletedRemote());
+        }));
+    });
+
+    private static string Dump(params string[] names) =>
+        "{" + string.Join(",", names.Select(n => $"\"{n}\":{{\"type\":\"local\"}}")) + "}";
+
+    // A batch file standing in for rclone.exe: prints `stdout`, or fails with `stderr`, and records its arguments.
+    private static string FakeRclone(string stdout, string stderr)
+    {
+        var dir = Directory.CreateTempSubdirectory("rm-fake-rclone-").FullName;
+        File.WriteAllText(Path.Combine(dir, "out.txt"), stdout);
+        File.WriteAllText(Path.Combine(dir, "err.txt"), stderr);
+        var exe = Path.Combine(dir, "rclone.cmd");
+        File.WriteAllText(exe, "@echo off\r\necho %*>>\"%~dp0calls.log\"\r\ntype \"%~dp0out.txt\"\r\n"
+            + (stderr.Length == 0 ? "" : "type \"%~dp0err.txt\" 1>&2\r\nexit /b 1\r\n"));
+        return exe;
+    }
+
+    // A shell with the Mounts tab, which a remote refresh repaints, and a fake rclone for its config.
+    private static (MainForm Form, List<ActivityEntry> Log) RemoteShell(string stdout, string stderr = "")
+    {
+        var form = Shell();
+        var log = new ActivityLog();
+        var entries = new List<ActivityEntry>();
+        log.Appended += entries.Add;
+        Set(form, "activityLog", log);
+        Call(form, "BuildMountsTab", new Panel());
+        Set(form, "configService", new RcloneConfigService(FakeRclone(stdout, stderr)));
+        return (form, entries);
+    }
+
+    private static void RunCheck(MainForm form, JobSpec spec) =>
+        Call(form, "CheckRunRemotesAsync", new JobRun { Spec = spec });
+
+    private static void PumpUntil(Func<bool> done)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!done())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "timed out");
+            Application.DoEvents();
+            Thread.Sleep(5);
+        }
+    }
+
+    private static void WithEnvironment(string name, string value, Action body)
+    {
+        var saved = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, value);
+        try { body(); }
+        finally { Environment.SetEnvironmentVariable(name, saved); }
+    }
+
     // MainForm's own constructor loads settings, adds a tray icon and auto-mounts. Run only the
     // Form base constructor, then call single tab builders with just the fields they read.
     private static MainForm Shell()
