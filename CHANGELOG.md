@@ -32,10 +32,24 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
-- **A locked or unreadable `rclone.conf` no longer deletes your mounts.**
-  When the remote list could not be read at startup (for example an
-  encrypted config), every mount was removed from `settings.json` as
-  "orphaned". The repair now runs only when the list loaded.
+- **A locked, unreadable or empty `rclone.conf` no longer deletes your
+  mounts.** When the remote list could not be read at startup (for
+  example an encrypted config), or came back empty (for example after
+  picking a portable rclone with another config), every mount was removed
+  from `settings.json` as "orphaned". The repair now runs only when the
+  list loaded and has remotes in it.
+- **A cancelled Windows shutdown no longer leaves RcloneMount half dead.**
+  It used to unmount, remove the tray icon and stop the scheduler when the
+  shutdown was asked for, and kept running that way if you cancelled it.
+  The cleanup now waits until Windows confirms the shutdown.
+- **Upload checks, keep-awake and live stats survive an rclone update.**
+  After an rclone update, Locate rclone or an automatic update, the
+  pending-uploads count, keep-awake, live speeds and lifetime totals
+  stopped until you restarted the app.
+- **Changing a job to `every N hours` no longer runs it within seconds.**
+  The interval now starts from the save.
+- **Lifetime transfer totals are saved atomically**, so a shutdown can no
+  longer reset them to zero.
 - **rclone no longer waits forever on a hidden password prompt.** A missing
   or wrong config password now fails fast, and RcloneMount asks again once.
 - **Cancelling a running job now shows it as Cancelled.** It used to end
@@ -100,10 +114,11 @@ changes (e.g. `settings.json` shape changes that need a migration).
   yet. Exit, Unmount, Remove mount, Restore, Locate rclone and both
   updates now ask first: Wait until they finish, go ahead anyway, or
   cancel. Waiting never treats an rclone that stops answering as "done".
-  Removing, renaming or deleting a remote says plainly that its pending
-  files will not be uploaded. Auto-update and the auto-recover remount
-  wait instead of cutting uploads off, and auto-recover shows one balloon
-  if it has waited more than 10 minutes.
+  Removing a mount, or renaming or deleting a remote, says plainly that
+  its pending files will not be uploaded. Auto-update is skipped until
+  the next check while uploads are pending, and the auto-recover remount
+  waits instead of cutting uploads off, with one balloon if it has waited
+  more than 10 minutes.
   `RcloneMount.exe --unmount NAME` refuses with exit code 6 while uploads
   are pending.
 - **Keeps the PC awake and holds shutdown during work.** While a transfer
@@ -133,8 +148,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   disk space to keep. Values are checked against rclone's own size rules
   before saving; blank leaves rclone's default.
 - **New files from transfer jobs show up on mounted drives at once.**
-  When a job finishes, any mount of the remote it wrote to re-reads the
-  folders the job touched.
+  When a job finishes, any mount of the remote it wrote to refreshes the
+  folders from the mount root down to the job's target folder. Deeper
+  folders update at the next change check or the 15 s re-list.
 - **Help with Google's shared client_id retirement.** rclone's shared
   Google client_id will stop working during 2026. Google Drive and Google
   Photos remotes that still use it now show a warning with a link to
