@@ -150,7 +150,8 @@ public class RemoteReferenceTests : IDisposable
         using var process = System.Diagnostics.Process.Start(psi)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Only a hang guard: on a loaded PC one listing has taken more than 30 s.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         await process.WaitForExitAsync(timeout.Token);
         return await output + await error;
     }

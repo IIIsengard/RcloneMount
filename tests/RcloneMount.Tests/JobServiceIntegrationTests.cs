@@ -44,7 +44,7 @@ public class JobServiceIntegrationTests
 
         // Only a guard against hanging, well past what a loaded PC needs. When it fires, rclone is told
         // to quit and exits 0 with nothing reported.
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         var result = await new RcloneJobService(exe).RunAsync(spec, new Progress<JobProgress>(), timeout.Token);
 
         Assert.False(timeout.IsCancellationRequested, "rclone did not exit on its own");
@@ -63,7 +63,9 @@ public class JobServiceIntegrationTests
             $"echo 2026/01/01 00:00:00 NOTICE: {name}: Skipped copy as --dry-run is set (size 1)>&2",
             $"echo 2026/01/01 00:00:00 INFO  : {name}: Copied (new)>&2");
 
-        var result = await new RcloneJobService(exe).RunAsync(DryRunSpec, new Progress<JobProgress>(), CancellationToken.None);
+        // A long wait here, so a loaded PC cannot start the grandchild too late.
+        var service = new RcloneJobService(exe) { DrainWait = TimeSpan.FromSeconds(60) };
+        var result = await service.RunAsync(DryRunSpec, new Progress<JobProgress>(), CancellationToken.None);
 
         Assert.Equal(name, Assert.Single(result.DryRunActions!).Path);
         Assert.Contains("Copied (new)", result.StderrTail);

@@ -81,8 +81,9 @@ namespace RcloneMount.Services
             cachedRcloneConfigPath = null; // path changed → drop cached resolution
         }
 
-        // The UI thread can end up waiting this long.
-        private static readonly TimeSpan ConfigPathTimeout = TimeSpan.FromSeconds(5);
+        // The UI thread can end up waiting this long. Not shorter: giving up means using the
+        // default path, and a busy PC can take seconds to start rclone.
+        private static readonly TimeSpan ConfigPathTimeout = TimeSpan.FromSeconds(10);
 
         // Asks rclone where its config file actually is. Falls back to the default
         // %AppData%\rclone\rclone.conf location when rclone.exe hasn't been located or

@@ -51,7 +51,10 @@ public class VfsStatsTests
         try
         {
             int? idle = null;
-            for (var i = 0; i < 50 && idle is null; i++)
+            // Bounded by time, not tries: a try can fail in well under a second, and on a loaded
+            // PC all 50 ran out in 44 s while rclone was still starting.
+            var starting = Stopwatch.StartNew();
+            while (idle is null && starting.Elapsed < TimeSpan.FromSeconds(120))
             {
                 idle = await RcloneStatsPoller.FetchUploadsPendingAsync(rcPort);
                 if (idle is null) await Task.Delay(200);

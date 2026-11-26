@@ -147,7 +147,7 @@ namespace RcloneMount.Services
         // with it instead of carrying on unseen (Resume picks them up on next launch).
         private static readonly ChildProcessJob ChildJob = new();
         // How long to wait, after rclone exits, for the last of its output.
-        private static readonly TimeSpan DrainWait = TimeSpan.FromSeconds(5);
+        internal TimeSpan DrainWait { get; init; } = TimeSpan.FromSeconds(5);
 
         private readonly string exePath;
 

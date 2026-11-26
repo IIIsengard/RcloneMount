@@ -543,7 +543,7 @@ public class SettingsSaveTests
 
             Assert.Equal(SettingsService.DefaultRcloneConfigPath, SettingsService.ResolveRcloneConfigPath());
 
-            Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(20));
+            Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(30)); // ping runs for 40
             // ping holds the file open, so it can be deleted only once the whole tree is gone.
             Assert.True(SpinWait.SpinUntil(() =>
             {
