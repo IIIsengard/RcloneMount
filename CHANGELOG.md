@@ -32,6 +32,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **"Start with Windows" repairs a broken entry.** The toggle showed on while the
+  startup entry pointed to an app file that no longer existed. At startup the app now
+  points such an entry to itself and logs it.
 - **"View LICENSE file" works in an installed copy.** The app now ships `LICENSE.txt` and
   `THIRD-PARTY-NOTICES.md`.
 - **The About tab's privacy text was wrong.** It said the app transmits no

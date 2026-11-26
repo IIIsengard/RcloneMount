@@ -530,7 +530,11 @@ namespace RcloneMount
             {
                 var exePath = Environment.ProcessPath;
                 if (!string.IsNullOrEmpty(exePath))
+                {
                     AutostartService.MigrateLegacyIfNeeded(exePath);
+                    if (AutostartService.RepairIfStale(exePath) is { } stale)
+                        activityLog.Info($"Start with Windows pointed to a missing program ({stale}); re-pointed it to {exePath}.");
+                }
             }
             catch { }
 
