@@ -199,6 +199,12 @@ namespace RcloneMount
                 ItemHeight = 40,
                 IntegralHeight = false,
                 Visible = false,
+                FormattingEnabled = true,
+            };
+            // Rows are owner-drawn; this text is what screen readers announce.
+            historyList.Format += (_, e) =>
+            {
+                if (e.ListItem is TransferHistoryEntry t) e.Value = DescribeHistoryEntry(t);
             };
             historyList.DrawItem += HistoryList_DrawItem;
             historyHost.Controls.Add(historyList);
@@ -693,15 +699,26 @@ namespace RcloneMount
             metaFont.Dispose();
 
             // Timestamp on the right
-            var localTs = t.CompletedAtUtc.ToLocalTime();
-            var tsText = localTs.Date == DateTime.Today
-                ? localTs.ToString("HH:mm")
-                : localTs.ToString("MMM d HH:mm");
+            var tsText = FormatHistoryTime(t.CompletedAtUtc);
             var tsFont = new Font(Font.FontFamily, 8.25f);
             var tsRect = new Rectangle(e.Bounds.Right - 130, e.Bounds.Top + 12, 118, 18);
             TextRenderer.DrawText(e.Graphics, tsText, tsFont, tsRect, subFg,
                 TextFormatFlags.NoPrefix | TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
             tsFont.Dispose();
+        }
+
+        private static string DescribeHistoryEntry(TransferHistoryEntry t)
+        {
+            var name = string.IsNullOrEmpty(t.FileName) ? "(unnamed)" : t.FileName;
+            var direction = t.Direction switch { "up" => "upload", "down" => "download", _ => "transfer" };
+            var text = $"{name}, {direction}, {FormatBytes(t.SizeBytes)}, {FormatHistoryTime(t.CompletedAtUtc)}";
+            return string.IsNullOrEmpty(t.Error) ? text : $"{text}, failed: {t.Error}";
+        }
+
+        private static string FormatHistoryTime(DateTime completedUtc)
+        {
+            var local = completedUtc.ToLocalTime();
+            return local.ToString(local.Date == DateTime.Today ? "HH:mm" : "MMM d HH:mm");
         }
 
         private static string FormatBytes(long bytes)

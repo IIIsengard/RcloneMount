@@ -38,6 +38,7 @@ namespace RcloneMount.UI
 
             var lblMessage = new Label
             {
+                UseMnemonic = false,
                 Text = message,
                 Location = new Point(76, 22),
                 Size = new Size(ClientSize.Width - 96, 80),

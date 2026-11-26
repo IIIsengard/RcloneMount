@@ -54,6 +54,7 @@ namespace RcloneMount.UI
             };
             lblName = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(96, 6),
                 AutoSize = false,
                 Size = new Size(400, 18),
@@ -64,6 +65,7 @@ namespace RcloneMount.UI
             };
             lblRoute = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(96, 24),
                 AutoSize = false,
                 Size = new Size(400, 16),

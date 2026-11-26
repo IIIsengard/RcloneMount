@@ -101,7 +101,7 @@ namespace RcloneMount.UI
             };
 
             var lblTypeCaption = new Label { Text = "Type:", Location = new Point(12, 18), AutoSize = true };
-            lblType = new Label { Text = ProviderVisuals.FriendlyType(provider), Location = new Point(52, 18), AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
+            lblType = new Label { UseMnemonic = false, Text = ProviderVisuals.FriendlyType(provider), Location = new Point(52, 18), AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
 
             var contentTop = 48;
             if (RequiresOAuth)
@@ -121,6 +121,7 @@ namespace RcloneMount.UI
                 };
                 var lblBanner = new Label
                 {
+                    UseMnemonic = false,
                     Text = bannerText,
                     Dock = DockStyle.Fill,
                     ForeColor = Theme.Warn,
@@ -239,6 +240,7 @@ namespace RcloneMount.UI
 
                 var label = new Label
                 {
+                    UseMnemonic = false,
                     Text = opt.Name + (opt.Required ? " *" : ""),
                     Location = new Point(labelX, y + 4),
                     Size = new Size(inputX - labelX - 6, 20),
@@ -255,6 +257,7 @@ namespace RcloneMount.UI
                 var helpText = opt.Help?.Trim() ?? "";
                 var help = new Label
                 {
+                    UseMnemonic = false,
                     Text = helpText,
                     Location = new Point(inputX, y + 28),
                     Size = new Size(inputWidth, 0),

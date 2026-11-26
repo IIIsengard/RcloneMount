@@ -32,6 +32,12 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **`&` shows in names and headings.** "US & Canada" and "Startup & Updates" lost the `&`.
+- **Local paths in job rows** no longer start with a stray `:`.
+- **Layout:** the server-side transfer checkbox is no longer cut off (shorter label), the
+  services list has no horizontal scrollbar, the `>_` button shows in full, and the About
+  cards fit the window.
+- **Screen readers** read transfer history rows and the sidebar buttons by name.
 - **"Start with Windows" repairs a broken entry.** The toggle showed on while the
   startup entry pointed to an app file that no longer existed. At startup the app now
   points such an entry to itself and logs it.

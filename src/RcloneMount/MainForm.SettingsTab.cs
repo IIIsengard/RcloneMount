@@ -21,6 +21,7 @@ namespace RcloneMount
             Label MakeSectionHeader(string text, int y) => new()
             {
                 Text = text,
+                UseMnemonic = false,
                 Location = new Point(12, y),
                 AutoSize = true,
                 Font = new Font(Font.FontFamily, 8.5f, FontStyle.Bold),
@@ -39,7 +40,7 @@ namespace RcloneMount
             // rclone and WinFsp side by side. Two-row button layout because the buttons
             // don't fit on one line at the halved card width.
             var rcloneGroup = MakeSettingsCard("rclone", new Point(12, 40), new Size(LayoutMetrics.CardHalfWidth, 170), AnchorStyles.Top | AnchorStyles.Left);
-            lblRcloneInstalled = new Label { Location = new Point(15, 30), Size = new Size(500, 22), Text = "Detecting rclone...", TextAlign = ContentAlignment.MiddleLeft };
+            lblRcloneInstalled = new Label { UseMnemonic = false, Location = new Point(15, 30), Size = new Size(500, 22), Text = "Detecting rclone...", TextAlign = ContentAlignment.MiddleLeft };
             lblRcloneLatest    = new Label { Location = new Point(15, 56), Size = new Size(500, 22), Text = "Latest: (not checked)", TextAlign = ContentAlignment.MiddleLeft };
             btnLocateRclone  = new Button { Text = "Locate rclone.exe...", Location = new Point(15, 90),  Size = new Size(170, 30) };
             btnLocateRclone.Click += BtnLocateRclone_Click;
@@ -52,7 +53,7 @@ namespace RcloneMount
             rcloneGroup.Controls.AddRange(new Control[] { lblRcloneInstalled, lblRcloneLatest, btnLocateRclone, btnCheckRclone, btnInstallRclone, btnRcloneWebsite });
 
             var winFspGroup = MakeSettingsCard("WinFsp", new Point(554, 40), new Size(LayoutMetrics.CardHalfWidth, 170), AnchorStyles.Top | AnchorStyles.Left);
-            lblWinFspInstalled = new Label { Location = new Point(15, 30), Size = new Size(500, 22), Text = "Detecting WinFsp...", TextAlign = ContentAlignment.MiddleLeft };
+            lblWinFspInstalled = new Label { UseMnemonic = false, Location = new Point(15, 30), Size = new Size(500, 22), Text = "Detecting WinFsp...", TextAlign = ContentAlignment.MiddleLeft };
             lblWinFspLatest    = new Label { Location = new Point(15, 56), Size = new Size(500, 22), Text = "Latest: (not checked)", TextAlign = ContentAlignment.MiddleLeft };
             btnCheckWinFsp   = new Button { Text = "Check for Update",    Location = new Point(15, 90),  Size = new Size(140, 30) };
             btnCheckWinFsp.Click += async (_, _) => await CheckWinFspUpdateAsync(showMessages: true);

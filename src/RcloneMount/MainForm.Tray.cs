@@ -71,7 +71,7 @@ namespace RcloneMount
                     var external = !mounted && RcloneMountService.IsDriveMountedExternally(m.DriveLetter);
                     var state = mounted ? "Mounted" : external ? "External" : "Idle";
                     var label = $"{m.RemoteName} → {m.DriveLetter}  ({state})";
-                    var sub = new ToolStripMenuItem(label);
+                    var sub = new ToolStripMenuItem(label.Replace("&", "&&")); // a lone & is a mnemonic
 
                     if (mounted || external)
                     {

@@ -15,6 +15,7 @@ namespace RcloneMount.UI
 
             var lblSubject = new Label
             {
+                UseMnemonic = false,
                 Text = subject,
                 Dock = DockStyle.Top,
                 Height = 32,

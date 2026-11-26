@@ -331,7 +331,7 @@ namespace RcloneMount
             // Status strip is a single label that paints three text regions itself — left
             // (mount count), center (transfer rate), right (app version). Overlaying separate
             // labels turned out to be fragile with Anchor+Location math, so we owner-draw.
-            lblStatus = new Label { Text = "", Location = new Point(12, 605), Size = new Size(990, 24), BorderStyle = BorderStyle.None, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right, BackColor = Theme.SurfaceRaised, ForeColor = Theme.TextSecondary, Padding = new Padding(28, 0, 120, 0) };
+            lblStatus = new Label { Text = "", UseMnemonic = false, Location = new Point(12, 605), Size = new Size(990, 24), BorderStyle = BorderStyle.None, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right, BackColor = Theme.SurfaceRaised, ForeColor = Theme.TextSecondary, Padding = new Padding(28, 0, 120, 0) };
             statusRightText = $"RcloneMount v{AppVersion}";
             lblStatus.Paint += (_, e) =>
             {
@@ -1177,6 +1177,7 @@ namespace RcloneMount
             b.FlatAppearance.MouseOverBackColor = Theme.RailHoverBg;
             b.FlatAppearance.MouseDownBackColor = Theme.RailHoverBg;
             iconToolTip.SetToolTip(b, tooltip);
+            b.AccessibleName = tooltip; // otherwise screen readers read the glyph
             return b;
         }
 

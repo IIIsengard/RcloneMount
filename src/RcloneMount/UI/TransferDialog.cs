@@ -190,7 +190,7 @@ namespace RcloneMount.UI
             btnDestBrowse.Click += (_, _) => PickLocalFolder(txtDestPath);
 
             chkDryRun = new CheckBox { Text = "Dry-run (log what would happen, don't touch files)", Location = new Point(140, 234), AutoSize = true, Checked = existingJob?.DryRun ?? true };
-            chkServerSide = new CheckBox { Text = "Try server-side transfer between different remotes (--server-side-across-configs)", Location = new Point(140, 259), AutoSize = true, Checked = existingJob?.ServerSideAcrossConfigs ?? false };
+            chkServerSide = new CheckBox { Text = "Try server-side transfer across remotes (--server-side-across-configs)", Location = new Point(140, 259), AutoSize = true, Checked = existingJob?.ServerSideAcrossConfigs ?? false };
             chkOneWay   = new CheckBox { Text = "One-way (ignore files present only on destination)", Location = new Point(140, 234), AutoSize = true, Checked = existingJob?.OneWay ?? false, Visible = false };
             chkSizeOnly = new CheckBox { Text = "Size only (skip hashing — faster, less strict)", Location = new Point(140, 259), AutoSize = true, Checked = existingJob?.SizeOnly ?? false, Visible = false };
 
@@ -214,6 +214,7 @@ namespace RcloneMount.UI
 
             lblFiltersSummary = new Label
             {
+                UseMnemonic = false,
                 Text = filters.Summarise(),
                 Location = new Point(115, 291),
                 Size = new Size(430, 18),
@@ -252,7 +253,7 @@ namespace RcloneMount.UI
             lblScheduleError = new Label
             {
                 // Full dialog width so the format list is never ellipsised; ends at y 357, where the Extra flags box starts.
-                Location = new Point(16, 344), Size = new Size(524, 13), AutoEllipsis = true,
+                Location = new Point(16, 344), Size = new Size(524, 13), AutoEllipsis = true, UseMnemonic = false,
                 Font = new Font(SystemFonts.MessageBoxFont!.FontFamily, 7.5f),
             };
             txtSchedule.TextChanged += (_, _) => ShowScheduleError();

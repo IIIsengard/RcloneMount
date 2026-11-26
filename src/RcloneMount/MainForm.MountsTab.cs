@@ -93,6 +93,7 @@ namespace RcloneMount
             var railRefreshBtn = MakeIconButton("⟳", "Refresh service list");
             var railMoreBtn    = MakeIconButton("≡", "Open rclone config (CLI)");
             railTerminalBtn    = MakeIconButton(">_", "rclone terminal (run any rclone command)");
+            railTerminalBtn.Width = 36; // at 28 the two characters wrap and only ">" shows
             railAddBtn.Click     += BtnAddRemote_Click;
             railRemoveBtn.Click  += BtnDeleteRemote_Click;
             railRefreshBtn.Click += async (_, _) => await RefreshRemotesAsync();
@@ -133,6 +134,7 @@ namespace RcloneMount
 
             detailTitleLabel = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(56, 8),
                 Font = new Font(Font.FontFamily, 15f, FontStyle.Bold),
                 ForeColor = Theme.TextPrimary,
@@ -141,6 +143,7 @@ namespace RcloneMount
             };
             detailSubtitleLabel = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(56, 36),
                 Font = new Font(Font.FontFamily, 8.75f),
                 ForeColor = Theme.TextSecondary,
@@ -373,7 +376,9 @@ namespace RcloneMount
             {
                 var forRemote = mounts.Where(m => string.Equals(m.RemoteName, r.Name, StringComparison.Ordinal)).ToList();
                 var running = forRemote.Count(m => mountService is not null && mountService.IsMounted(m));
-                var row = new RemoteRow { Width = railList.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4 };
+                var row = new RemoteRow();
+                // From Width, not ClientSize: the same result whether or not the scrollbar is showing yet.
+                row.Width = railList.Width - SystemInformation.VerticalScrollBarWidth - row.Margin.Horizontal;
                 row.Bind(r, forRemote.Count, running);
                 var captured = r.Name;
                 row.Clicked += (_, _) => { selectedRemoteName = captured; RebuildRailSelection(); RefreshDetail(); };
@@ -500,6 +505,7 @@ namespace RcloneMount
             {
                 var lbl = new Label
                 {
+                    UseMnemonic = false,
                     Text = k.ToUpperInvariant(),
                     Location = new Point(12, y + 2),
                     Size = new Size(150, 18),
@@ -508,6 +514,7 @@ namespace RcloneMount
                 };
                 var val = new Label
                 {
+                    UseMnemonic = false,
                     Text = v,
                     Location = new Point(170, y),
                     Size = new Size(settingsCardBody.Width - 190, 22),

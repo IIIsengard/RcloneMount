@@ -31,6 +31,7 @@ namespace RcloneMount.Services
 
         // Re-points a Run value whose exe is gone (app moved or rebuilt). Never creates a value.
         // Returns the replaced value, or null if nothing was written.
+        // shortcut: an exe on an unplugged or offline drive counts as gone; check the drive too if portable use matters.
         public static string? RepairIfStale(string currentExePath)
         {
             try

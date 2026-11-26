@@ -86,7 +86,7 @@ namespace RcloneMount.UI
             var lblCacheFree = new Label { Text = "Keep disk free:", Location = new Point(12, 325), AutoSize = true };
             txtCacheMinFree = new TextBox { Location = new Point(140, 322), Width = 90, Text = existing?.VfsCacheMinFreeSpace ?? "" };
             var lblCacheFreeHint = new Label { Text = MinFreeHint, Location = new Point(140, 347), Size = new Size(308, HintBoxHeight), AutoSize = false };
-            lblError = new Label { Location = new Point(12, 436), Size = new Size(436, 50), Visible = false, AutoSize = false };
+            lblError = new Label { UseMnemonic = false, Location = new Point(12, 436), Size = new Size(436, 50), Visible = false, AutoSize = false };
             btnBrowse.AccessibleName = "Browse for cache folder";
 
             chkAutoMount = new CheckBox { Text = "Auto-mount at startup", Location = new Point(140, 410), AutoSize = true, Checked = existing?.AutoMount ?? false };

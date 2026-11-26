@@ -17,9 +17,14 @@ namespace RcloneMount
         // Layout uses the same section-header + card idiom as the Settings tab.
         private void BuildAboutTab(Panel root)
         {
+            // A hidden Dock=Fill panel is still 200 px wide here, and Right anchors are measured
+            // from the width at the time a card is added: without this the cards end up ~1950 wide.
+            root.Width = LayoutMetrics.TabHostWidth;
+
             Label MakeSectionHeader(string text, int y) => new()
             {
                 Text = text,
+                UseMnemonic = false,
                 Location = new Point(12, y),
                 AutoSize = true,
                 Font = new Font(Font.FontFamily, 8.5f, FontStyle.Bold),
@@ -30,6 +35,7 @@ namespace RcloneMount
             Label MakeBody(string text, Point location, Size size, bool secondary = false) => new()
             {
                 Text = text,
+                UseMnemonic = false,
                 Location = location,
                 Size = size,
                 AutoSize = false,

@@ -34,6 +34,7 @@ namespace RcloneMount.UI
 
             lblName = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(12, 6),
                 AutoSize = true,
                 Font = new Font(Font.FontFamily, Font.Size, FontStyle.Bold),
@@ -42,6 +43,7 @@ namespace RcloneMount.UI
             };
             lblRoute = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(12, 24),
                 AutoSize = true,
                 Font = new Font(FontFamily.GenericMonospace, Font.Size - 0.5f),
@@ -147,8 +149,9 @@ namespace RcloneMount.UI
             return b;
         }
 
+        // Display only. An empty remote is a local path: show it alone, as typed.
         private static string FormatSpec(string remote, string path) =>
-            $"{remote}:{(path ?? "").TrimStart('/')}";
+            string.IsNullOrEmpty(remote) ? path ?? "" : $"{remote}:{(path ?? "").TrimStart('/')}";
 
         private static string AgoLabel(TimeSpan ts)
         {

@@ -76,6 +76,7 @@ namespace RcloneMount.UI
 
             lblDescription = new Label
             {
+                UseMnemonic = false,
                 Location = new Point(12, 332),
                 Size = new Size(528, 100),
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
