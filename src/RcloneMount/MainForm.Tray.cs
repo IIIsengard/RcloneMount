@@ -137,6 +137,7 @@ namespace RcloneMount
         {
             if (mountService is null) return;
             if (!await UploadsGuardAsync(new[] { m }, "Unmount", interactive: true)) return;
+            KeepUnmounted(m);
             try
             {
                 var (live, _) = await StopMountAsync(m);

@@ -82,6 +82,20 @@ public class RemoteReferenceTests : IDisposable
         Assert.Equal("RCLONE_ENCRYPT_V0:\r\nabc\r\n", File.ReadAllText(Conf));
     }
 
+    // Two sections of one name would be left, whichever side of the renamed one the other sits.
+    [Theory]
+    [InlineData("[old]\r\ntype = local\r\n\r\n[new]\r\ntype = local\r\n")]
+    [InlineData("[new]\r\ntype = local\r\n\r\n[old]\r\ntype = local\r\n")]
+    public async Task Rename_OntoAnExistingSection_IsRefusedAndUntouched(string config)
+    {
+        File.WriteAllText(Conf, config);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => RcloneConfigService.RenameInFileAsync(Conf, "old", "new"));
+
+        Assert.Contains("already exists", ex.Message);
+        Assert.Equal(config, File.ReadAllText(Conf));
+    }
+
     // Encrypted config: the user renames in rclone, so the app names what else to change.
     [Fact]
     public void DependentsOf_ListsTheRemotesPointingAtOne()

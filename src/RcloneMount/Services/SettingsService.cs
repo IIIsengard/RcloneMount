@@ -311,12 +311,11 @@ namespace RcloneMount.Services
         // Zip the CURRENT settings.json (and rclone.conf if we can find it) into backups/
         // before overwriting. Filename is timestamped so the ring is naturally sorted.
         // The zip layout is a flat archive with two entries: "settings.json" and
-        // "rclone.conf" (omitted if not found). Throws when the backup cannot be written; the
-        // activity log and transfer totals are best-effort.
+        // "rclone.conf" (omitted if not found). Without a settings.json the zip holds defaults,
+        // which is what the app is running on, so it can still be restored. Throws when the
+        // backup cannot be written; the activity log and transfer totals are best-effort.
         private static void BackupCurrentFile()
         {
-            if (!File.Exists(SettingsFilePath))
-                throw new FileNotFoundException("There are no saved settings to back up.", SettingsFilePath);
             if (!Directory.Exists(BackupsFolder))
                 Directory.CreateDirectory(BackupsFolder);
             var ts = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
@@ -328,8 +327,29 @@ namespace RcloneMount.Services
                 if (i > 99) break;
             }
 
-            using var zip = ZipFile.Open(dest, ZipArchiveMode.Create);
-            zip.CreateEntryFromFile(SettingsFilePath, "settings.json", CompressionLevel.Optimal);
+            // Built under a name ListBackups ignores: a half-written zip must not pass for a backup.
+            var temp = $"{dest}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                WriteBackupZip(temp);
+                File.Move(temp, dest);
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+        }
+
+        private static void WriteBackupZip(string path)
+        {
+            using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
+            if (File.Exists(SettingsFilePath))
+                zip.CreateEntryFromFile(SettingsFilePath, "settings.json", CompressionLevel.Optimal);
+            else
+            {
+                using var defaults = zip.CreateEntry("settings.json", CompressionLevel.Optimal).Open();
+                JsonSerializer.Serialize(defaults, new AppSettings(), JsonOptions);
+            }
             var rclone = ResolveRcloneConfigPath();
             if (File.Exists(rclone))
                 zip.CreateEntryFromFile(rclone, "rclone.conf", CompressionLevel.Optimal);
@@ -368,6 +388,8 @@ namespace RcloneMount.Services
             saveGate.Wait();
             try
             {
+                if (!File.Exists(SettingsFilePath))
+                    throw new FileNotFoundException("There are no saved settings to back up.", SettingsFilePath);
                 BackupCurrentFile();
                 TrimBackups();
             }
@@ -473,7 +495,7 @@ namespace RcloneMount.Services
                 files.Add((SettingsFilePath, CheckedSettings(File.ReadAllText(backupPath))));
             }
 
-            if (File.Exists(SettingsFilePath))
+            if (files.Any(f => File.Exists(f.Target)))
             {
                 // The user is promised an undo, so no backup means no restore.
                 try { BackupCurrentFile(); }

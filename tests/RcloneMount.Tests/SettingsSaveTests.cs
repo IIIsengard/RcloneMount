@@ -441,6 +441,57 @@ public class SettingsSaveTests
         }
     }
 
+    // A damaged settings.json was moved aside: rclone.conf is still there and about to be replaced.
+    [Fact]
+    public async Task RestoreWithoutASettingsFile_StillBacksUpRcloneConf_AndCanBeUndone()
+    {
+        var conf = SettingsService.RcloneConfigPathOverride!;
+        Directory.CreateDirectory(Path.GetDirectoryName(conf)!);
+        try
+        {
+            File.WriteAllText(conf, "[from-backup]\ntype = local\n");
+            var backup = await BackupOf(new AppSettings { ThemePreference = "Light" });
+            File.WriteAllText(conf, "[current]\ntype = local\n");
+            File.Delete(SettingsService.CurrentSettingsPath);
+            var old = BackupFiles();
+
+            SettingsService.RestoreFromBackup(backup);
+
+            var undo = Assert.Single(BackupFiles().Except(old));
+            SettingsService.RestoreFromBackup(undo);
+            Assert.Contains("[current]", File.ReadAllText(conf));
+            Assert.NotEqual("Light", Saved().ThemePreference); // back to the defaults it ran on
+        }
+        finally
+        {
+            File.Delete(conf);
+            ResetRestored();
+        }
+    }
+
+    [Fact]
+    public async Task BackupThatFailsPartway_LeavesNoZip_AndStillSaves()
+    {
+        var conf = SettingsService.RcloneConfigPathOverride!;
+        Directory.CreateDirectory(Path.GetDirectoryName(conf)!);
+        File.WriteAllText(conf, "[a]\ntype = local\n");
+        try
+        {
+            await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Light" });
+            Directory.CreateDirectory(SettingsService.BackupsFolder);
+            var before = Directory.GetFiles(SettingsService.BackupsFolder).Order().ToArray();
+            using (new FileStream(conf, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Dark" });
+                Assert.ThrowsAny<IOException>(SettingsService.ForceBackup);
+            }
+
+            Assert.Equal("Dark", Saved().ThemePreference);
+            Assert.Equal(before, Directory.GetFiles(SettingsService.BackupsFolder).Order().ToArray());
+        }
+        finally { File.Delete(conf); }
+    }
+
     // A path that cannot be used as a folder.
     private static string AFile()
     {

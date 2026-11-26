@@ -160,6 +160,9 @@ namespace RcloneMount
                     detachedMountIds.Remove(m.Id);
                 }
 
+                // Checked after the awaits above: the user may unmount while this pass runs.
+                if (m.UnmountedByUser) continue;
+
                 ScheduleRetry(m);
                 scheduled++;
             }

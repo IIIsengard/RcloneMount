@@ -122,7 +122,7 @@ namespace RcloneMount
 
             if (!mountService.IsMounted(found))
             {
-                CancelRetry(found.Id); // a dropped drive waiting to be remounted would come back
+                KeepUnmounted(found); // a dropped drive waiting to be remounted would come back
                 return new CliRelay.Response(0, $"'{found.RemoteName}' is not mounted.");
             }
 
@@ -132,7 +132,7 @@ namespace RcloneMount
                 return new CliRelay.Response(6,
                     $"'{found.RemoteName}' at {found.DriveLetter} still has uploads pending. Try again when they finish, or unmount it in the app.");
 
-            CancelRetry(found.Id);
+            KeepUnmounted(found);
 
             try
             {

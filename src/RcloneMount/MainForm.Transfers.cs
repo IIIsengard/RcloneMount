@@ -543,6 +543,7 @@ namespace RcloneMount
                 "Unmount drive", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (res != DialogResult.Yes) return;
             if (!await UploadsGuardAsync(new[] { mount }, "Unmount", interactive: true)) return;
+            KeepUnmounted(mount);
 
             try
             {

@@ -174,6 +174,14 @@ changes (e.g. `settings.json` shape changes that need a migration).
   visibly flashed to zero and re-filled each time. RefreshActiveList now
   matches existing controls by JobRun.Id / drive-letter key and re-binds
   in place; only new rows are constructed, only vanished rows disposed.
+- **A restore always keeps a way back.** When the settings file was missing (for example after
+  a damaged one was moved aside), a restore could replace `rclone.conf` without backing it up.
+- **A failed backup no longer leaves half a backup behind.** If a file such as `rclone.conf` was
+  locked, the unfinished zip was listed with the good ones and restored only part of your setup.
+- **A drive you unmount stays unmounted.** Waking the PC, a network change or an rclone update
+  could mount an auto-mount drive again; now it waits until you mount it or restart the app.
+- **Renaming a remote can no longer create two with the same name.** The name was not checked
+  against remotes listed after the renamed one in `rclone.conf`.
 
 ### Added
 - **Support link.** The About tab and the README link to Buy Me a Coffee.

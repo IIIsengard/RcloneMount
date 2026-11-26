@@ -113,6 +113,9 @@ namespace RcloneMount.Services
             var oldHeader = "[" + oldName + "]";
             var newHeader = "[" + newName + "]";
             var replaced = false;
+            // Anywhere in the file: rclone would be left with two sections of one name.
+            if (lines.Any(l => string.Equals(l.TrimEnd(), newHeader, StringComparison.Ordinal)))
+                throw new InvalidOperationException($"A remote named '{newName}' already exists in rclone.conf.");
             for (var i = 0; i < lines.Length; i++)
             {
                 if (string.Equals(lines[i].TrimEnd(), oldHeader, StringComparison.Ordinal))
@@ -121,8 +124,6 @@ namespace RcloneMount.Services
                     replaced = true;
                     break;
                 }
-                if (string.Equals(lines[i].TrimEnd(), newHeader, StringComparison.Ordinal))
-                    throw new InvalidOperationException($"A remote named '{newName}' already exists in rclone.conf.");
             }
             if (!replaced)
                 throw new InvalidOperationException($"Section [{oldName}] not found in rclone.conf.");

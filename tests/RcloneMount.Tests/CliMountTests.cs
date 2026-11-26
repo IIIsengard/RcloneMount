@@ -120,6 +120,45 @@ public class CliMountTests
         Assert.True(token.IsCancellationRequested);
     }
 
+    [Theory]
+    [InlineData("UnmountAsync")]
+    [InlineData("UnmountFromTrayAsync")]
+    [InlineData("CliUnmountAsync")]
+    public async Task UserUnmount_StaysDownUntilTheNextManualMount(string unmount)
+    {
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = UnusedLetter(), AutoMount = true });
+        using var service = rig.Service;
+        var retries = (Dictionary<string, CancellationTokenSource>)Field("retryCts").GetValue(rig.Form)!;
+
+        await Invoke<Task>(rig.Form, unmount, unmount == "CliUnmountAsync" ? "r" : rig.Mount!);
+        await rig.Form.KickAutoRemountsAsync("network up");
+        await Invoke<Task>(rig.Form, "AutoMountOnStartupAsync"); // runs again after an rclone update
+
+        Assert.Empty(retries);
+        Assert.DoesNotContain(rig.Logged, e => e.Message.StartsWith("Auto-mounting"));
+
+        await Invoke<Task>(rig.Form, "MountFromTrayAsync", rig.Mount!); // fails: no rclone.exe
+        await rig.Form.KickAutoRemountsAsync("network up");
+
+        Assert.Single(retries);
+        retries[rig.Mount!.Id].Cancel();
+    }
+
+    // The app's own unmounts (restore, exit, a dropped drive) are not the user's.
+    [Fact]
+    public async Task AutoRecover_RemountsADriveTheUserDidNotUnmount()
+    {
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = UnusedLetter(), AutoMount = true });
+        using var service = rig.Service;
+        var retries = (Dictionary<string, CancellationTokenSource>)Field("retryCts").GetValue(rig.Form)!;
+        await service.UnmountAllAsync();
+
+        await rig.Form.KickAutoRemountsAsync("restore did not finish");
+
+        Assert.Single(retries);
+        retries[rig.Mount!.Id].Cancel();
+    }
+
     private sealed record Rig(MainForm Form, Mount? Mount, List<Mount> Mounts, RcloneMountService Service,
         Dictionary<string, string> Configured, List<(string Message, int Thread)> Logged);
 
@@ -154,6 +193,7 @@ public class CliMountTests
         Set("remotes", new[] { new RcloneRemote { Name = "r", Type = "local" } });
         Set("configuredDriveLetters", configured);
         Set("retryCts", new Dictionary<string, CancellationTokenSource>());
+        Set("detachedMountIds", new HashSet<string>());
         Set("activityLog", log);
         Set("mountService", service);
         Set("winFspInfo", RuntimeHelpers.GetUninitializedObject(Field("winFspInfo").FieldType));

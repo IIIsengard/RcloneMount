@@ -323,22 +323,19 @@ public class UiTextTests
             Spec = new JobSpec(), JobId = "a", State = JobRunState.Failed, Outcome = "Failed to start",
             StartedUtc = done.AddSeconds(-1), FinishedUtc = done,
         };
-        WithoutSaving(() =>
-        {
-            _ = form.Handle;
-            Call(form, "OnJobRunFinished", run);
-            Assert.Null(job.LastRunUtc); // posted to the UI thread, not done on the caller's
-            Application.DoEvents();
-            Assert.Equal(done, job.LastRunUtc);
-            Assert.Equal("Failed to start", job.LastResultKind);
-            Assert.Equal(new[] { run.Id }, notified);
+        _ = form.Handle;
+        Call(form, "OnJobRunFinished", run);
+        Assert.Null(job.LastRunUtc); // posted to the UI thread, not done on the caller's
+        Application.DoEvents();
+        Assert.Equal(done, job.LastRunUtc);
+        Assert.Equal("Failed to start", job.LastResultKind);
+        Assert.Equal(new[] { run.Id }, notified);
 
-            job.LastRunUtc = null;
-            Call(form, "OnJobRunFinished", run);
-            Application.DoEvents();
-            Assert.Null(job.LastRunUtc);
-            typeof(Control).GetMethod("DestroyHandle", Private)!.Invoke(form, null);
-        });
+        job.LastRunUtc = null;
+        Call(form, "OnJobRunFinished", run);
+        Application.DoEvents();
+        Assert.Null(job.LastRunUtc);
+        typeof(Control).GetMethod("DestroyHandle", Private)!.Invoke(form, null);
     });
 
     [Theory]
@@ -356,7 +353,7 @@ public class UiTextTests
         var asked = "";
         Set(form, "confirmJobDelete", new Func<string, DialogResult>(message => { asked = message; return answer; }));
 
-        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+        Call(form, "DeleteSavedJobAsync", job);
 
         Assert.Contains("window", asked);
         var deleted = answer == DialogResult.Yes;
@@ -401,7 +398,7 @@ public class UiTextTests
             saveCallback: saved.Add, existingJob: job);
         open.Owner = form;
 
-        WithoutSaving(() => Call(form, "ApplyRemoteRenameAsync", "r", "new"));
+        Call(form, "ApplyRemoteRenameAsync", "r", "new");
 
         Assert.Equal("new", mount.RemoteName);
         Assert.Equal(("new", "new"), (job.SourceRemote, job.DestRemote));
@@ -484,7 +481,7 @@ public class UiTextTests
         var asked = "";
         Set(form, "confirmJobDelete", new Func<string, DialogResult>(message => { asked = message; return answer; }));
 
-        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+        Call(form, "DeleteSavedJobAsync", job);
 
         Assert.Contains("cancelled", asked);
         var deleted = answer == DialogResult.Yes;
@@ -512,7 +509,7 @@ public class UiTextTests
             return DialogResult.Yes;
         }));
 
-        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+        Call(form, "DeleteSavedJobAsync", job);
 
         Assert.DoesNotContain("cancelled", asked); // nothing was running when asked
         Assert.Equal(JobRunState.Cancelled, late!.State);
@@ -543,11 +540,8 @@ public class UiTextTests
             saveCallback: _ => { }, existingJob: job);
         open.Owner = form;
 
-        WithoutSaving(() =>
-        {
-            Call(form, "ApplyRemoteDeletedAsync", "gone");
-            Call(form, "SchedulerTick");
-        });
+        Call(form, "ApplyRemoteDeletedAsync", "gone");
+        Call(form, "SchedulerTick");
 
         Assert.Equal("gone", job.DeletedRemote());
         Assert.Equal("daily 00:00", job.Schedule);
@@ -611,7 +605,7 @@ public class UiTextTests
         other.State = JobRunState.Failed;
         Set(form, "confirmJobDelete", new Func<string, DialogResult>(_ => DialogResult.Yes));
 
-        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+        Call(form, "DeleteSavedJobAsync", job);
 
         Assert.Null(queue.Retry(finished.Id));
         Assert.Null(queue.Retry(waiting.Id));
@@ -696,15 +690,6 @@ public class UiTextTests
         else Assert.Null(error);
     });
 
-    // Some actions save settings: make that a no-op so the real settings.json is never written.
-    private static void WithoutSaving(Action body)
-    {
-        var readError = typeof(SettingsService).GetProperty(nameof(SettingsService.LoadReadError))!;
-        readError.SetValue(null, "test: do not save");
-        try { body(); }
-        finally { readError.SetValue(null, null); }
-    }
-
     private static TransferJob SavedJob() => new()
     {
         Id = "a", Name = "nightly", Operation = "Copy",
@@ -766,7 +751,23 @@ public class UiTextTests
     private static void Set(MainForm form, string name, object value) => Field(name).SetValue(form, value);
     private static object? Get(MainForm form, string name) => Field(name).GetValue(form);
     private static void Call(MainForm form, string name, params object?[] args) =>
-        typeof(MainForm).GetMethod(name, Private)!.Invoke(form, args);
+        Finish(typeof(MainForm).GetMethod(name, Private)!.Invoke(form, args) as Task);
+
+    // Some actions save settings (redirected by TestIsolation). Wait for the action and its saves,
+    // so none is still running when a later test controls the save gate.
+    private static void Finish(Task? action)
+    {
+        var saveGate = (SemaphoreSlim)typeof(SettingsService)
+            .GetField("saveGate", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (action is { IsCompleted: false } || saveGate.CurrentCount == 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the action or its save did not finish");
+            Application.DoEvents();
+            Thread.Sleep(5);
+        }
+        action?.GetAwaiter().GetResult();
+    }
 
     // Same shape as the real window: hidden Dock=Fill tab panels inside a 1096 x 532 content host.
     private static Panel Host(out Panel tab)
@@ -792,7 +793,11 @@ public class UiTextTests
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try { body(); }
+            try
+            {
+                body();
+                Finish(null);
+            }
             catch (Exception ex) { failure = ex; }
         });
         thread.SetApartmentState(ApartmentState.STA);

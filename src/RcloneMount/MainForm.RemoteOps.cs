@@ -25,6 +25,7 @@ namespace RcloneMount
 
             foreach (var m in mounts.Where(m => m.AutoMount).ToList())
             {
+                if (m.UnmountedByUser) continue; // this also runs again after an rclone update
                 if (!remotes.Any(r => r.Name == m.RemoteName)) continue;
                 if (mountService.IsMounted(m)) continue;
                 // A hit here means the configured letter is already up under someone
