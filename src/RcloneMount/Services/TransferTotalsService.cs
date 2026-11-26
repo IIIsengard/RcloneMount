@@ -21,7 +21,10 @@ namespace RcloneMount.Services
     {
         private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-        public static string FilePath => Path.Combine(
+        // Tests point this at a temp file so they never write the user's %AppData%.
+        internal static string? PathOverride { get; set; }
+
+        public static string FilePath => PathOverride ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "RcloneMount",
             "transfer-totals.json");
@@ -48,8 +51,10 @@ namespace RcloneMount.Services
             if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
             totals.LastUpdatedUtc = DateTime.UtcNow;
-            await File.WriteAllTextAsync(FilePath, JsonSerializer.Serialize(totals, JsonOptions))
-                .ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(totals, JsonOptions);
+            // Atomic: saves run right before the process is killed (shutdown, update), and a torn
+            // file would load as zero totals.
+            await Task.Run(() => SettingsService.WriteAtomic(FilePath, json)).ConfigureAwait(false);
         }
     }
 }

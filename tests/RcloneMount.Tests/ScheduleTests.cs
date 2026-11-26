@@ -293,6 +293,24 @@ public class ScheduleTests
         Assert.Equal(Utc(1, 15, 9, 0), Schedule.NextRunOf(jobs[0], Utc(1, 14, 10), Uk)!.Value.ToUniversalTime());
     }
 
+    // A schedule changed to "every Nh" restarts its clock (AnchorIfNew stamps it without running):
+    // counting from the old daily stamp could start a sync or move within 30 s of saving.
+    [Theory]
+    [InlineData("daily 03:00", "every 6h", true)]
+    [InlineData("every 6h", "every 3h", true)]
+    [InlineData("daily 03:00", "daily 09:00", false)]
+    [InlineData("every 6h", "every 6h", false)]
+    [InlineData("daily 03:00", "daily 03:00", false)]
+    public void Edit_ToChangedInterval_RestartsClock(string before, string after, bool restarts)
+    {
+        var fired = Utc(1, 14, 3, 0, 5).UtcDateTime;
+        var jobs = new List<TransferJob> { new() { Id = "a", Schedule = before, LastScheduledFireUtc = fired } };
+        MainForm.UpsertInto(jobs, new TransferJob { Id = "a", Schedule = after });
+
+        Assert.Equal(restarts ? (DateTime?)null : fired, jobs[0].LastScheduledFireUtc);
+        if (restarts) Assert.True(Schedule.AnchorIfNew(jobs[0], Utc(1, 14, 10)));
+    }
+
     [Fact]
     public void CompleteRun_JobDeletedMidRun_DoesNotThrow()
     {

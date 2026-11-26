@@ -25,7 +25,10 @@ namespace RcloneMount
         private void StartStatsPolling()
         {
             if (mountService is null) return;
-            statsPoller ??= new RcloneStatsPoller(mountService, () => mounts);
+            // Rebuilt every call: callers run right after replacing mountService (update, Locate),
+            // and a poller bound to the old one sees no RC ports, so no stats and no pending uploads.
+            statsPoller?.Dispose();
+            statsPoller = new RcloneStatsPoller(mountService, () => mounts);
             if (statsTimer is null)
             {
                 statsTimer = new System.Windows.Forms.Timer { Interval = 2000 };

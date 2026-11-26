@@ -574,35 +574,38 @@ namespace RcloneMount
                 return;
             }
 
+            if (shutdownComplete) return;
+            var busy = CurrentBusyReason();
+            switch (PowerGuard.Closing(e.CloseReason == CloseReason.WindowsShutDown, Visible, busy))
+            {
+                // Busy with the window open: refuse the shutdown query so Windows lists RcloneMount with
+                // its reason; the user can still pick "Shut down anyway" (WndProc's WM_ENDSESSION).
+                case ClosingStep.Hold:
+                    e.Cancel = true;
+                    PowerGuard.Apply(Handle, busy);
+                    activityLog.Warn($"Windows shutdown held: {busy}");
+                    _ = Services.TransferTotalsService.SaveAsync(lifetimeTotals); // in case Windows ends us without WM_ENDSESSION
+                    return;
+                // Hidden in the tray, or idle: answer yes and change nothing. WndProc tears down on
+                // WM_ENDSESSION(true); a cancelled shutdown (wParam 0) leaves the app running as it was.
+                case ClosingStep.TearDownAtEndSession:
+                    return;
+            }
+
             // async void: without this the form closes at the first await and the process
             // exits before mounts unmount. Cancel, finish the teardown, then close for real.
-            // Windows shutdown keeps the old best-effort path so we don't block log-off.
-            if (shutdownComplete) return;
-            // Busy with the window open: refuse the shutdown query so Windows lists RcloneMount with
-            // its reason; the user can still pick "Shut down anyway" (WndProc's WM_ENDSESSION).
-            // Hidden in the tray, or idle, keeps the best-effort path below.
-            var busy = CurrentBusyReason();
-            if (e.CloseReason == CloseReason.WindowsShutDown && PowerGuard.HoldShutdown(Visible, busy))
+            e.Cancel = true;
+            if (shutdownStarted) { uploadsDialog?.Activate(); return; }
+            shutdownStarted = true; // a second Exit while the prompt is open must not start teardown
+            var proceed = false;
+            try { proceed = await UploadsGuardAsync(mounts, "Exit", interactive: true); }
+            catch (Exception ex) { HandleUnexpectedError("Exit stopped: the pending-uploads check failed", ex); }
+            if (!proceed)
             {
-                e.Cancel = true;
-                PowerGuard.Apply(Handle, busy);
-                activityLog.Warn($"Windows shutdown held: {busy}");
-                _ = Services.TransferTotalsService.SaveAsync(lifetimeTotals); // in case Windows ends us without WM_ENDSESSION
+                shutdownStarted = false;
+                exitFromTray = false;
                 return;
             }
-            if (e.CloseReason != CloseReason.WindowsShutDown)
-            {
-                e.Cancel = true;
-                if (shutdownStarted) { uploadsDialog?.Activate(); return; }
-                shutdownStarted = true; // a second Exit while the prompt is open must not start teardown
-                if (!await UploadsGuardAsync(mounts, "Exit", interactive: true))
-                {
-                    shutdownStarted = false;
-                    exitFromTray = false;
-                    return;
-                }
-            }
-            shutdownStarted = true;
 
             StopBackgroundWork();
             if (mountService is not null)
@@ -614,7 +617,7 @@ namespace RcloneMount
             // object), their InFlight flag stays set, and next launch offers to resume them.
             PowerGuard.Apply(Handle, null);
             shutdownComplete = true;
-            if (e.Cancel) BeginInvoke(new Action(Close));
+            BeginInvoke(new Action(Close));
         }
 
         // Safe to run twice: the WM_ENDSESSION path may follow a teardown already in progress.
@@ -634,9 +637,10 @@ namespace RcloneMount
 
         private const int WM_ENDSESSION = 0x0016;
 
-        // WinForms raises no FormClosing for WM_ENDSESSION, so "Shut down anyway" after a held
-        // shutdown would skip the unmount and the totals save. Windows ends the process a few
-        // seconds after this returns, so the same best-effort teardown runs here, time-bounded.
+        // WinForms raises no FormClosing for WM_ENDSESSION, and FormClosing never tears down for a
+        // Windows shutdown (a cancelled one would leave a zombie), so every shutdown teardown runs
+        // here: after "Shut down anyway" on a held shutdown, or when we did not hold. Windows ends
+        // the process a few seconds after this returns, so it is best-effort and time-bounded.
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == WM_ENDSESSION && m.WParam != IntPtr.Zero && !shutdownComplete)

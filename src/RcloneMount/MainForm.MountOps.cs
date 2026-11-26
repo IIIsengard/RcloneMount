@@ -178,11 +178,13 @@ namespace RcloneMount
             if (step != UploadsGuardStep.Ask) return step == UploadsGuardStep.Proceed;
 
             using var dlg = new PendingUploadsDialog(action, pending, resumes, () => CountPendingUploadsAsync(list));
-            // Asked from the tray with the window hidden: no parent to centre on or to sit above.
-            if (!Visible) { dlg.StartPosition = FormStartPosition.CenterScreen; dlg.TopMost = true; }
+            // Hidden in the tray or minimised: an owned dialog would hide with its owner (Windows hides
+            // a minimised owner's windows), so show it unowned, centred and on top.
+            var owner = Visible && WindowState != FormWindowState.Minimized ? this : null;
+            if (owner is null) { dlg.StartPosition = FormStartPosition.CenterScreen; dlg.TopMost = true; }
             DialogResult result;
             uploadsDialog = dlg;
-            try { result = dlg.ShowDialog(this); }
+            try { result = dlg.ShowDialog(owner); }
             finally { uploadsDialog = null; }
             if (result == DialogResult.Yes)
                 activityLog.Warn($"{action} went ahead with {pending?.ToString() ?? "an unknown number of"} mount upload(s) pending; " +

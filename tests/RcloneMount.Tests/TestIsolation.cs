@@ -10,7 +10,11 @@ internal static class TestIsolation
     internal static readonly string Dir = Directory.CreateTempSubdirectory("rm-test-appdata-").FullName;
 
     [ModuleInitializer]
-    internal static void Init() => TransferHistoryService.PathOverride = Path.Combine(Dir, "transfers.jsonl");
+    internal static void Init()
+    {
+        TransferHistoryService.PathOverride = Path.Combine(Dir, "transfers.jsonl");
+        TransferTotalsService.PathOverride = Path.Combine(Dir, "transfer-totals.json");
+    }
 }
 
 public class TestIsolationTests

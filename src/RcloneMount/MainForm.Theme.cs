@@ -83,6 +83,12 @@ namespace RcloneMount
                 if (map.TryGetValue(btn.FlatAppearance.MouseDownBackColor, out var md))
                     btn.FlatAppearance.MouseDownBackColor = md;
             }
+            if (c is LinkLabel lnk)
+            {
+                if (map.TryGetValue(lnk.LinkColor, out var l)) lnk.LinkColor = l;
+                if (map.TryGetValue(lnk.ActiveLinkColor, out var a)) lnk.ActiveLinkColor = a;
+                if (map.TryGetValue(lnk.VisitedLinkColor, out var v)) lnk.VisitedLinkColor = v;
+            }
 
             foreach (Control child in c.Controls)
                 RemapColorsRecursive(child, map);

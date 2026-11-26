@@ -40,7 +40,7 @@ namespace RcloneMount.UI
                            ? $"{Count(n)} pending: files written to the drive are not in the cloud yet.\n\n"
                            : "RcloneMount can't reach rclone to check whether uploads are still pending.\n\n") +
                        (resumes
-                           ? "Going ahead now stops them. rclone uploads them the next time that drive is mounted."
+                           ? "Going ahead now stops them. rclone uploads them the next time that drive is mounted with the same remote, path and cache settings."
                            : "Going ahead now stops them. These files will NOT be uploaded; they stay only in rclone's local cache."),
             };
             btnWait = new Button { Text = "Wait", AutoSize = true, MinimumSize = new Size(96, 30) };

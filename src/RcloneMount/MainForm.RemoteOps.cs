@@ -113,7 +113,7 @@ namespace RcloneMount
             // remote was removed from rclone.conf and left this behind. Without
             // this the mount lingers in settings.json and the status-bar count
             // reads "of N" where N > the visible mount rows.
-            var orphans = mounts.Where(m => !known.Contains(m.RemoteName)).ToList();
+            var orphans = OrphanedMounts(mounts, remotes);
             foreach (var m in orphans)
             {
                 CancelRetry(m.Id);
@@ -130,6 +130,15 @@ namespace RcloneMount
                 if (orphans.Count > 0) parts.Add($"removed {orphans.Count} orphaned mount(s)");
                 SetStatus(string.Join("; ", parts) + ".");
             }
+        }
+
+        // None when the list is empty: `config dump` on a missing config (portable exe picked by
+        // Locate, RCLONE_CONFIG gone) exits 0 with {}, and that must not delete every mount.
+        internal static List<Mount> OrphanedMounts(IEnumerable<Mount> mounts, IReadOnlyCollection<RcloneRemote> remotes)
+        {
+            if (remotes.Count == 0) return new List<Mount>();
+            var known = remotes.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+            return mounts.Where(m => !known.Contains(m.RemoteName)).ToList();
         }
 
         // False when the remotes could not be read, so callers don't take "unknown" for "none".

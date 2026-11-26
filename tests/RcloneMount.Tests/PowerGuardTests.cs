@@ -18,15 +18,19 @@ public class PowerGuardTests
     public void BusyReason_NamesTheWork(int jobsRunning, int uploadsPending, string? expected) =>
         Assert.Equal(expected, PowerGuard.BusyReason(jobsRunning, uploadsPending));
 
-    // Windows terminates a window-less app that refuses shutdown, so a hidden (tray) window
-    // must take the best-effort teardown path instead of holding.
+    // Windows terminates a window-less app that refuses shutdown, so a hidden (tray) window must
+    // not hold. WM_QUERYENDSESSION only asks: tearing down then would leave a process with no tray,
+    // mounts or scheduler if the shutdown is cancelled, so teardown waits for WM_ENDSESSION(true).
     [Theory]
-    [InlineData(true, "A transfer job is running.", true)]
-    [InlineData(false, "A transfer job is running.", false)]
-    [InlineData(true, null, false)]
-    [InlineData(false, null, false)]
-    public void HoldShutdown_OnlyVisibleAndBusy(bool windowVisible, string? busyReason, bool expected) =>
-        Assert.Equal(expected, PowerGuard.HoldShutdown(windowVisible, busyReason));
+    [InlineData(true, true, "A transfer job is running.", ClosingStep.Hold)]
+    [InlineData(true, false, "A transfer job is running.", ClosingStep.TearDownAtEndSession)]
+    [InlineData(true, true, null, ClosingStep.TearDownAtEndSession)]
+    [InlineData(true, false, null, ClosingStep.TearDownAtEndSession)]
+    [InlineData(false, true, "A transfer job is running.", ClosingStep.TearDownNow)]
+    [InlineData(false, false, null, ClosingStep.TearDownNow)]
+    public void Closing_HoldsOnlyVisibleAndBusy_NeverTearsDownOnTheQuery(
+        bool windowsShutDown, bool windowVisible, string? busyReason, ClosingStep expected) =>
+        Assert.Equal(expected, PowerGuard.Closing(windowsShutDown, windowVisible, busyReason));
 
     // Real Win32 calls on a window this test creates and owns (never the app's): the shutdown
     // reason Windows would show is the one we set, the thread asks for ES_SYSTEM_REQUIRED while

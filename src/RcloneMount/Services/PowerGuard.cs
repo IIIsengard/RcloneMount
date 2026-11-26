@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 
 namespace RcloneMount.Services
 {
+    public enum ClosingStep { TearDownNow, Hold, TearDownAtEndSession } // public: xUnit theory parameter
+
     // Keeps the PC from idle-sleeping and names the work on Windows' "apps are preventing
     // shutdown" screen while a job runs or mount uploads are pending. Both Win32 states belong
     // to the calling thread / window, so call Apply from the UI thread with the main form's handle.
@@ -30,9 +32,13 @@ namespace RcloneMount.Services
         }
 
         // Hold a Windows shutdown only with a visible window: Windows terminates a window-less app
-        // that refuses shutdown, which would skip even the best-effort teardown.
-        internal static bool HoldShutdown(bool windowVisible, string? busyReason) =>
-            windowVisible && busyReason is not null;
+        // that refuses shutdown, which would skip even the best-effort teardown. Otherwise leave the
+        // teardown to WM_ENDSESSION(true): WM_QUERYENDSESSION only asks, and if another app or the
+        // user cancels the shutdown, tearing down here would leave a process with no tray or mounts.
+        internal static ClosingStep Closing(bool windowsShutDown, bool windowVisible, string? busyReason) =>
+            !windowsShutDown ? ClosingStep.TearDownNow
+            : windowVisible && busyReason is not null ? ClosingStep.Hold
+            : ClosingStep.TearDownAtEndSession;
 
         // reason null clears both states; otherwise sets (or updates) them.
         internal static void Apply(IntPtr hwnd, string? reason)

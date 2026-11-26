@@ -585,6 +585,10 @@ namespace RcloneMount
             // is recorded on the new object by CompleteRun.
             var old = jobs[idx];
             incoming.LastScheduledFireUtc = old.LastScheduledFireUtc;
+            // A changed "every Nh" restarts its clock (AnchorIfNew, no run): counting from an old
+            // daily stamp could start a sync or move within 30 s of saving.
+            if (incoming.Schedule != old.Schedule && Schedule.TryParse(incoming.Schedule, out var s, out _) && s is { IsInterval: true })
+                incoming.LastScheduledFireUtc = null;
             incoming.LastRunUtc = old.LastRunUtc;
             incoming.LastResultKind = old.LastResultKind;
             incoming.InFlight = old.InFlight;

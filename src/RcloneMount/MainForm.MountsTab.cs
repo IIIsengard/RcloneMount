@@ -261,9 +261,10 @@ namespace RcloneMount
                 Padding = new Padding(10, 6, 10, 6),
                 BackColor = Theme.WarnTint,
                 ForeColor = Theme.TextPrimary,
-                LinkColor = Theme.Accent,
-                ActiveLinkColor = Theme.AccentHover,
-                VisitedLinkColor = Theme.Accent,
+                // AccentHover: Accent is 3.7:1 on the dark WarnTint; this 8.75 pt link needs 4.5:1.
+                LinkColor = Theme.AccentHover,
+                ActiveLinkColor = Theme.TextPrimary,
+                VisitedLinkColor = Theme.AccentHover,
                 Font = new Font(Font.FontFamily, 8.75f),
                 Visible = false
             };
