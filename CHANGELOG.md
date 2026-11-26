@@ -32,6 +32,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **The About tab's privacy text was wrong.** It said the app transmits no
+  data, but by default it checks GitHub for new RcloneMount, rclone and
+  WinFsp releases at startup. The About tab and the README now say what is
+  contacted (`github.com`, `api.github.com`), when, and how to turn the
+  startup check off.
+- **A failed automatic update now appears in the activity log**, not only
+  in the status bar.
 - **A locked, unreadable or empty `rclone.conf` no longer deletes your
   mounts.** When the remote list could not be read at startup (for
   example an encrypted config), or came back empty (for example after
