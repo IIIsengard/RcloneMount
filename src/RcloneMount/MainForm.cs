@@ -747,7 +747,8 @@ namespace RcloneMount
                     activityLog.Warn($"Mount {label} exited unexpectedly (code {e.ExitCode}).");
                 }
 
-                if (e.WasIntentional || e.ExitCode == 0)
+                // UnmountedByUser: a crash that arrives after the user's own unmount needs no remount or popup.
+                if (e.WasIntentional || e.ExitCode == 0 || mount?.UnmountedByUser == true)
                     return;
 
                 if (mount is not null && mount.AutoMount)

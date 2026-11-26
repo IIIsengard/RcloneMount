@@ -179,6 +179,21 @@ public class CliMountTests
         AssertBackOnConfiguredLetter(rig, "C:");
     }
 
+    // rclone can die just as the user clicks Unmount; its exit event is handled after the click.
+    [Fact]
+    public void CrashExit_ArrivingAfterAUserUnmount_DoesNotBringTheDriveBack() => WithUiThread(
+        new Mount { RemoteName = "r", DriveLetter = "C:", AutoMount = true, UnmountedByUser = true },
+        (form, rig, pump) =>
+        {
+            Field("lblStatus").SetValue(form, new Label());
+
+            Invoke<object>(form, "MountService_MountExited", rig.Service,
+                new MountExitedEventArgs(rig.Mount!.Id, 1, Array.Empty<string>(), false));
+            Application.DoEvents();
+
+            Assert.Empty((Dictionary<string, CancellationTokenSource>)Field("retryCts").GetValue(form)!);
+        });
+
     // Asking for a mount means "I want it up", also when it cannot start right now.
     [Theory]
     [InlineData("MountAsync")]
