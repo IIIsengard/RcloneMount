@@ -54,7 +54,7 @@ namespace RcloneMount.Services
             var json = JsonSerializer.Serialize(totals, JsonOptions);
             // Atomic: saves run right before the process is killed (shutdown, update), and a torn
             // file would load as zero totals.
-            await Task.Run(() => SettingsService.WriteAtomic(FilePath, json)).ConfigureAwait(false);
+            await Task.Run(() => SettingsService.WriteUnlessRestored(FilePath, json)).ConfigureAwait(false);
         }
     }
 }

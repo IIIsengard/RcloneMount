@@ -76,6 +76,10 @@ namespace RcloneMount
 
         private async Task<CliRelay.Response> CliMountAsync(string name, CancellationToken ct)
         {
+            // We arrive on the pipe thread, but mounts, remotes and drive letters belong to
+            // the UI thread: run the whole command there.
+            if (InvokeRequired) return await Invoke(() => CliMountAsync(name, ct));
+
             var found = FindMountByName(name);
             if (found is null)
                 return new CliRelay.Response(2, $"No mount named '{name}'. Use --list to see configured mounts.");
@@ -92,8 +96,17 @@ namespace RcloneMount
             if (winFspInfo is null)
                 return new CliRelay.Response(5, "WinFsp is not installed — rclone mount cannot start.");
 
+            CancelRetry(found.Id);
+
             try
             {
+                // Same fallback as the Mount button when the configured letter is taken.
+                var requested = found.DriveLetter;
+                if (!ResolveDriveLetterForMount(found, out var chosen, out var wasFallback))
+                    return new CliRelay.Response(5, $"Mount failed: no free drive letter for '{found.RemoteName}'.");
+                if (wasFallback)
+                    activityLog.Info($"Drive {requested} was taken — falling back to {chosen} for {found.RemoteName}.");
+
                 await mountService.MountAsync(found);
             }
             catch (Exception ex)
@@ -105,13 +118,9 @@ namespace RcloneMount
             // reads from it doesn't race the mount. Same 15s ceiling as the UI path.
             var ready = await WaitForDriveReadyAsync(found.DriveLetter, TimeSpan.FromSeconds(15));
 
-            // Refresh the row visuals on the UI thread — mount succeeded either way,
-            // but the timer-driven refresh could be up to 1s behind and users notice.
-            try
-            {
-                if (InvokeRequired) BeginInvoke(new Action(RefreshMountList));
-                else RefreshMountList();
-            }
+            // Refresh the row visuals — mount succeeded either way, but the timer-driven
+            // refresh could be up to 1s behind and users notice.
+            try { RefreshMountList(); }
             catch { }
 
             if (!ready)

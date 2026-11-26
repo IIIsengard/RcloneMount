@@ -16,5 +16,13 @@ namespace RcloneMount.Models
         public string VfsCacheMaxSize { get; set; } = string.Empty;
         public string VfsCacheMinFreeSpace { get; set; } = string.Empty;
         public bool AutoMount { get; set; }
+
+        // A copy to save with another letter, leaving the live object alone.
+        public Mount WithDriveLetter(string letter)
+        {
+            var copy = (Mount)MemberwiseClone();
+            copy.DriveLetter = letter;
+            return copy;
+        }
     }
 }

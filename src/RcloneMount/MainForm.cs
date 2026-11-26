@@ -80,8 +80,8 @@ namespace RcloneMount
         // session so the rest of the codebase (RC lookups, ShellNotifier, drive-ready
         // polls) transparently uses the letter that's actually live. This dict is the
         // shadow of the ORIGINAL configured letter so we can restore it on unmount /
-        // process exit and — critically — swap it back in before we serialize settings
-        // so the user's intent isn't overwritten on disk.
+        // process exit and — critically — save it in place of the live letter when we
+        // serialize settings so the user's intent isn't overwritten on disk.
         private readonly Dictionary<string, string> configuredDriveLetters = new(StringComparer.Ordinal);
 
         // Mounts tab — master-detail. Fields drop `readonly` because they're now
@@ -828,26 +828,24 @@ namespace RcloneMount
             }
         }
 
-        private async Task SaveSettingsAsync()
+        // Set while saves keep failing, so only the first failure of a streak raises a notice.
+        private bool saveFailureShown;
+
+        // False when the settings could not be written. Never throws: the failure is logged and
+        // shown here, so callers that discard the task are covered too.
+        private async Task<bool> SaveSettingsAsync()
         {
             // Any mount currently running on a session-fallback letter has its
             // DriveLetter mutated to the letter it actually got. Serializing that would
-            // silently overwrite the user's configured choice on disk, so briefly swap
-            // each such mount back to its original while SaveAsync takes its snapshot, and
-            // restore before the first await so an overlapping save never sees the swap.
-            var swapped = new List<(Mount m, string live)>();
-            foreach (var m in mounts)
-            {
-                if (configuredDriveLetters.TryGetValue(m.Id, out var original) && !string.IsNullOrEmpty(original))
-                {
-                    swapped.Add((m, m.DriveLetter));
-                    m.DriveLetter = original;
-                }
-            }
-            Task save;
+            // silently overwrite the user's configured choice on disk, so save a copy that
+            // carries the original. The live object is never touched: the CLI pipe and the
+            // stats poller read it from other threads.
+            var toSave = mounts.Select(m =>
+                configuredDriveLetters.TryGetValue(m.Id, out var original) && !string.IsNullOrEmpty(original)
+                    ? m.WithDriveLetter(original) : m).ToList();
             try
             {
-                save = SettingsService.SaveAsync(new AppSettings
+                await SettingsService.SaveAsync(new AppSettings
                 {
                     RcloneExePath = savedRclonePath,
                     CheckForUpdatesOnStartup = checkForUpdatesOnStartup,
@@ -856,16 +854,19 @@ namespace RcloneMount
                     FirstRunSetupDone = firstRunSetupDone,
                     ThemePreference = themePreferenceOverride,
                     BackupsFolderOverride = backupsFolderOverride,
-                    Mounts = mounts,
+                    Mounts = toSave,
                     Jobs = jobs,
                 });
+                saveFailureShown = false;
+                return true;
             }
-            finally
+            catch (Exception ex)
             {
-                foreach (var (m, live) in swapped)
-                    m.DriveLetter = live;
+                if (saveFailureShown) activityLog.Error($"Settings still not saved: {ex.Message}");
+                else HandleUnexpectedError("Settings could not be saved", ex);
+                saveFailureShown = true;
+                return false;
             }
-            await save;
         }
 
         // Tray balloon that honours the Notifications toggle. Callers should route

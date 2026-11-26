@@ -35,6 +35,12 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **Changes made in quick succession are saved correctly.** When two saves overlapped, the
   settings file could get half-finished changes or the save could fail, and a mount running
   on a temporary drive letter could show the wrong letter.
+- **Restoring a backup stays restored.** The closing app could write its old settings or
+  transfer totals back over the restored files before restarting.
+- **"Backup now" no longer collides with a save in progress.**
+- **`--mount` picks another drive letter when yours is taken**, like the Mount button does.
+- **You are told when settings cannot be saved.** The failure appears in the log and as a
+  tray notice, once until saving works again.
 - **"Last run" on the Jobs tab updates after every run.** Only scheduled runs recorded it;
   jobs started by hand stayed on "never run".
 - **Saving a new job twice no longer creates a duplicate.**

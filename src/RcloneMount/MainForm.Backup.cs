@@ -55,7 +55,7 @@ namespace RcloneMount
                 return;
             }
             backupsFolderOverride = chosen;
-            await SaveSettingsAsync();
+            if (!await SaveSettingsAsync()) return;
             RefreshBackupsList();
             SetStatus($"Backups folder set to {chosen}.");
         }
@@ -63,7 +63,7 @@ namespace RcloneMount
         private async Task ResetBackupsFolderAsync()
         {
             backupsFolderOverride = null;
-            await SaveSettingsAsync();
+            if (!await SaveSettingsAsync()) return;
             RefreshBackupsList();
             SetStatus("Backups folder reset to default.");
         }
@@ -74,7 +74,8 @@ namespace RcloneMount
         {
             try
             {
-                await SaveSettingsAsync();
+                if (!await SaveSettingsAsync())
+                    throw new InvalidOperationException("The current settings could not be saved. See the Log tab.");
                 SettingsService.ForceBackup();
                 RefreshBackupsList();
                 SetStatus("Backup created.");

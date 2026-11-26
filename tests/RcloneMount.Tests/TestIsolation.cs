@@ -16,6 +16,7 @@ internal static class TestIsolation
         TransferTotalsService.PathOverride = Path.Combine(Dir, "transfer-totals.json");
         SettingsService.PathOverride = Path.Combine(Dir, "RcloneMount", "settings.json");
         SettingsService.RcloneConfigPathOverride = Path.Combine(Dir, "rclone", "rclone.conf");
+        RcloneConfigPassword.FilePath = Path.Combine(Dir, "RcloneMount", "config-pass.bin");
     }
 }
 

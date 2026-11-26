@@ -204,6 +204,10 @@ namespace RcloneMount.Services
             }
         }
 
+        // Set by a successful restore: the app is about to restart, and nothing it still holds in
+        // memory may overwrite the restored files. Only touched under saveGate; tests reset it.
+        internal static bool Restored { get; set; }
+
         public static async Task SaveAsync(AppSettings settings)
         {
             if (LoadReadError is not null) return; // see LoadReadError
@@ -228,7 +232,7 @@ namespace RcloneMount.Services
             try
             {
             // SemaphoreSlim promises no FIFO order: never replace a newer snapshot with an older one.
-            if (snapshot.Order < newestWritten) return;
+            if (Restored || snapshot.Order < newestWritten) return;
 
             // Keep the runtime override in sync with what's about to hit disk so the
             // BackupsFolder used a moment later reflects the new choice.
@@ -269,6 +273,15 @@ namespace RcloneMount.Services
 
         // Scheduler completions, UI actions and timers all save; one at a time.
         private static readonly System.Threading.SemaphoreSlim saveGate = new(1, 1);
+
+        // For the other files a restore brings back. Under saveGate, so a write already on its way
+        // cannot land on top of the restored file.
+        internal static void WriteUnlessRestored(string path, string text)
+        {
+            saveGate.Wait();
+            try { if (!Restored) WriteAtomic(path, text); }
+            finally { saveGate.Release(); }
+        }
 
         // Atomic write: the text goes to a unique .tmp sibling, then File.Move(overwrite)
         // renames it over the target — atomic on NTFS same-volume, so a crash or power loss
@@ -352,10 +365,17 @@ namespace RcloneMount.Services
 
         // Public entry point for the "Backup now" button. Same underlying implementation
         // as the auto-backup path, but callable regardless of whether anything changed.
+        // Takes saveGate: zipping settings.json while a save replaces it would fail that save.
+        // Blocking is safe on the UI thread, since no save needs that thread to finish.
         public static void ForceBackup()
         {
-            BackupCurrentFile();
-            TrimBackups();
+            saveGate.Wait();
+            try
+            {
+                BackupCurrentFile();
+                TrimBackups();
+            }
+            finally { saveGate.Release(); }
         }
 
         private static bool IsBackupFile(FileInfo f) =>
@@ -409,6 +429,18 @@ namespace RcloneMount.Services
             if (string.IsNullOrWhiteSpace(backupPath) || !File.Exists(backupPath))
                 throw new FileNotFoundException("Backup file not found.", backupPath);
 
+            saveGate.Wait();
+            try
+            {
+                RestoreFiles(backupPath);
+                Restored = true; // only on success: after a failed restore the app carries on saving
+            }
+            finally { saveGate.Release(); }
+        }
+
+        // Caller holds saveGate.
+        private static void RestoreFiles(string backupPath)
+        {
             var directory = Path.GetDirectoryName(SettingsFilePath);
             if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
