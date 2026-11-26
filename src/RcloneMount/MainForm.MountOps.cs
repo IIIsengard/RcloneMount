@@ -76,6 +76,7 @@ namespace RcloneMount
 
         private async Task MountAsync(Mount selected)
         {
+            selected.UnmountedByUser = false; // asked for: also when it cannot start now
             if (mountService is null) return;
 
             CancelRetry(selected.Id);
@@ -152,7 +153,6 @@ namespace RcloneMount
         // and nothing was started. Call on the UI thread with mountService set.
         private async Task<bool> StartMountAsync(Mount m)
         {
-            m.UnmountedByUser = false;
             if (mountService!.IsMounted(m)) return true; // picking again would move a live mount's letter
             var requested = m.DriveLetter;
             if (!ResolveDriveLetterForMount(m, out var chosen, out var wasFallback)) return false;

@@ -8,10 +8,7 @@ using RcloneMount.Services;
 namespace RcloneMount.Tests;
 
 // These hold the save gate and redirect or block writes, so nothing else may run beside them.
-[CollectionDefinition(nameof(SettingsSaveTests), DisableParallelization = true)]
-public class SettingsSaveCollection { }
-
-[Collection(nameof(SettingsSaveTests))]
+[Collection(nameof(SharedStatics))]
 public class SettingsSaveTests
 {
     // Gate for every test below: nothing a save reads or writes may be a real user file.
@@ -83,34 +80,15 @@ public class SettingsSaveTests
     {
         var mount = new Mount { RemoteName = "r", DriveLetter = "Z:" };
         var form = Shell(mount, configured: "M:");
-        // Enough mounts that serializing takes long enough for the reader to look in.
-        var mounts = (List<Mount>)typeof(MainForm).GetField("mounts", Private)!.GetValue(form)!;
-        mounts.AddRange(Enumerable.Range(0, 20_000).Select(_ => new Mount()));
-        using var reading = new ManualResetEventSlim();
-        var done = false;
-        var sawSwap = false;
-        var reader = new Thread(() =>
-        {
-            reading.Set();
-            while (!Volatile.Read(ref done))
-                if (mount.DriveLetter != "Z:") sawSwap = true;
-        });
-        reader.Start();
-        reading.Wait();
+        var whileSerializing = new List<string>();
+        SettingsService.Serializing = () => whileSerializing.Add(mount.DriveLetter);
 
-        try
-        {
-            for (var i = 0; i < 5; i++) await Save(form);
-        }
-        finally
-        {
-            Volatile.Write(ref done, true);
-            reader.Join();
-        }
+        try { await Save(form); }
+        finally { SettingsService.Serializing = null; }
 
-        Assert.False(sawSwap);
-        Assert.Equal("M:", Saved().Mounts[0].DriveLetter);
-        await SettingsService.SaveAsync(new AppSettings());
+        Assert.Equal(new[] { "Z:" }, whileSerializing);
+        Assert.Equal("Z:", mount.DriveLetter);
+        Assert.Equal("M:", Assert.Single(Saved().Mounts).DriveLetter);
     }
 
     [Fact]
@@ -141,6 +119,42 @@ public class SettingsSaveTests
             m => Assert.Contains("could not be saved", m),
             m => Assert.Contains("still not saved", m),
             m => Assert.Contains("could not be saved", m));
+    }
+
+    [Fact]
+    public async Task SkippedAutomaticBackup_IsLoggedOncePerStreak_AndStillSaves()
+    {
+        var form = Shell(new Mount(), configured: "M:");
+        var log = new ActivityLog();
+        Set(form, "activityLog", log);
+        var conf = SettingsService.RcloneConfigPathOverride!;
+        Directory.CreateDirectory(Path.GetDirectoryName(conf)!);
+        File.WriteAllText(conf, "[a]\ntype = local\n");
+        Task SaveTheme(string theme)
+        {
+            Set(form, "themePreferenceOverride", theme); // a change, so a backup is due
+            return Save(form);
+        }
+        FileStream Lock() => new(conf, FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            await SaveTheme("Light");
+            using (Lock())
+            {
+                await SaveTheme("Dark");
+                await SaveTheme("Auto");
+                await SaveTheme("Auto"); // unchanged: no backup is tried, the streak goes on
+                await SaveTheme("Dark");
+            }
+            await SaveTheme("Light");
+            using (Lock()) await SaveTheme("Dark");
+
+            Assert.Equal("Dark", Saved().ThemePreference);
+            var warnings = log.Snapshot().Where(e => e.Level == ActivityLevel.Warn).Select(e => e.Message).ToArray();
+            Assert.Equal(2, warnings.Length);
+            Assert.All(warnings, m => Assert.Contains("backup", m));
+        }
+        finally { File.Delete(conf); }
     }
 
     [Fact]
@@ -332,11 +346,12 @@ public class SettingsSaveTests
             await StopWritersThen(form, () => restored = true); // closed: goes ahead
 
             Assert.True(restored);
+            Assert.DoesNotContain(terminal, RcloneConfigService.Terminals); // closed ones are dropped
         }
         finally
         {
-            terminal.StandardInput.Close();
-            RcloneConfigService.Terminals.Remove(terminal);
+            // Still listed means not disposed: a disposed one has no input left to close.
+            if (RcloneConfigService.Terminals.Remove(terminal)) terminal.StandardInput.Close();
         }
     }
 

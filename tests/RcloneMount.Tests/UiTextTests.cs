@@ -9,6 +9,7 @@ using RcloneMount.UI;
 
 namespace RcloneMount.Tests;
 
+[Collection(nameof(SharedStatics))] // some actions save settings
 public class UiTextTests
 {
     [Fact]
@@ -413,6 +414,40 @@ public class UiTextTests
         Assert.Equal(("new", "new", "a"), (started[0].spec.SourceRemote, started[0].spec.DestRemote, started[0].id));
         Assert.Equal(("new", "new"), (saved[0].SourceRemote, saved[0].DestRemote));
     });
+
+    // rclone has loaded the config already, so a running sync would go on deleting after the remote is gone.
+    [Fact]
+    public void DeletingARemote_CancelsTheTransfersThatReachIt_AlsoThroughWrappers() => Sta(() =>
+    {
+        var form = Shell();
+        var crypt = new RcloneRemote { Name = "crypt", Type = "crypt", Parameters = { ["remote"] = "gone:enc" } };
+        var outer = new RcloneRemote { Name = "outer", Type = "alias", Parameters = { ["remote"] = "crypt:" } };
+        Set(form, "remotes", new[] { outer, crypt, new RcloneRemote { Name = "gone" }, new RcloneRemote { Name = "r" } });
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        var running = queue.Enqueue(new JobSpec { Operation = TransferOperation.Sync, SourceRemote = "r", DestRemote = "gone" }, "running");
+        using var cts = new CancellationTokenSource();
+        running.State = JobRunState.Running;
+        running.Cts = cts;
+        var wrapped = queue.Enqueue(new JobSpec { SourceRemote = "outer" }, "wrapped");
+        var other = queue.Enqueue(new JobSpec { SourceRemote = "r" }, "other");
+
+        Call(form, "ApplyRemoteDeletedAsync", "gone");
+
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Equal(JobRunState.Cancelled, wrapped.State);
+        Assert.Equal(JobRunState.Queued, other.State);
+    });
+
+    [Fact]
+    public void DeleteRemoteMessage_SaysTransfersWillBeCancelled_OnlyWhenThereAreSome()
+    {
+        var none = Array.Empty<TransferJob>();
+
+        Assert.Contains("2 running or queued transfer(s) using it will be cancelled",
+            MainForm.DeleteRemoteMessage("r", Array.Empty<Mount>(), none, activeTransfers: 2));
+        Assert.DoesNotContain("cancelled", MainForm.DeleteRemoteMessage("r", Array.Empty<Mount>(), none));
+    }
 
     [Fact]
     public void DeleteRemoteMessage_NamesTheSavedJobsThatUseIt()

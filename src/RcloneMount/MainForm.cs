@@ -830,6 +830,8 @@ namespace RcloneMount
 
         // Set while saves keep failing, so only the first failure of a streak raises a notice.
         private bool saveFailureShown;
+        // The same for skipped automatic backups, which a locked rclone.conf causes on every save.
+        private bool backupSkipLogged;
 
         // False when the settings could not be written. Never throws: the failure is logged and
         // shown here, so callers that discard the task are covered too.
@@ -858,6 +860,10 @@ namespace RcloneMount
                     Jobs = jobs,
                 });
                 saveFailureShown = false;
+                var skipped = SettingsService.BackupError;
+                if (skipped is not null && !backupSkipLogged)
+                    activityLog.Warn($"Settings were saved, but the automatic backup was skipped: {skipped}");
+                backupSkipLogged = skipped is not null;
                 return true;
             }
             catch (Exception ex)

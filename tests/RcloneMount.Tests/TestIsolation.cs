@@ -20,6 +20,11 @@ internal static class TestIsolation
     }
 }
 
+// For classes that swap or assert on process-wide statics (settings paths and flags, the save gate,
+// the stored-password path, RCLONE_CONFIG): nothing else runs beside them.
+[CollectionDefinition(nameof(SharedStatics), DisableParallelization = true)]
+public class SharedStatics { }
+
 public class TestIsolationTests
 {
     [Fact]

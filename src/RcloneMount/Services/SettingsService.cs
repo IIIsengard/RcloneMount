@@ -222,11 +222,21 @@ namespace RcloneMount.Services
         private static long snapshotsTaken;
         private static long newestWritten; // only touched while holding saveGate
 
+        // Tests look at the live objects at the moment a save serializes them.
+        internal static Action? Serializing { get; set; }
+
         // The caller keeps editing the same Mounts/Jobs lists, so copy everything a save needs now.
-        internal static Snapshot TakeSnapshot(AppSettings settings) => new(
-            System.Threading.Interlocked.Increment(ref snapshotsTaken),
-            JsonSerializer.Serialize(settings, JsonOptions),
-            settings.BackupsFolderOverride);
+        internal static Snapshot TakeSnapshot(AppSettings settings)
+        {
+            Serializing?.Invoke();
+            return new(
+                System.Threading.Interlocked.Increment(ref snapshotsTaken),
+                JsonSerializer.Serialize(settings, JsonOptions),
+                settings.BackupsFolderOverride);
+        }
+
+        // Why the last automatic backup was skipped; null once one is written again.
+        internal static string? BackupError { get; private set; }
 
         internal static async Task WriteSnapshotAsync(Snapshot snapshot)
         {
@@ -256,12 +266,16 @@ namespace RcloneMount.Services
                     var oldText = await File.ReadAllTextAsync(SettingsFilePath).ConfigureAwait(false);
                     changed = !string.Equals(oldText, json, StringComparison.Ordinal);
                     if (changed)
+                    {
                         BackupCurrentFile();
+                        BackupError = null;
+                    }
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // A failed backup is not a reason to skip the save.
+                BackupError = ex.Message;
             }
 
             WriteAtomic(SettingsFilePath, json);

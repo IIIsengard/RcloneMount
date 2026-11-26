@@ -142,7 +142,8 @@ namespace RcloneMount
         {
             static void RefuseOpenTerminals()
             {
-                if (RcloneConfigService.Terminals.Any(t => !t.HasExited))
+                RcloneConfigService.PruneTerminals();
+                if (RcloneConfigService.Terminals.Count > 0)
                     throw new InvalidOperationException(
                         "An rclone terminal or config window is still open. Close it, then restore again.");
             }

@@ -109,6 +109,7 @@ namespace RcloneMount
 
         private async Task MountFromTrayAsync(Mount m)
         {
+            m.UnmountedByUser = false; // asked for: also when it cannot start now
             if (mountService is null || winFspInfo is null) return;
             if (!remotes.Any(r => r.Name == m.RemoteName)) return;
             CancelRetry(m.Id);

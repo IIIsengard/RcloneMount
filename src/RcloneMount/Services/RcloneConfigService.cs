@@ -102,6 +102,15 @@ namespace RcloneMount.Services
             remotes.Where(r => r.Parameters.Any(p => RepointValue(r.Type, p.Key, p.Value, name, name + "_") != p.Value))
                 .Select(r => r.Name).ToList();
 
+        // `name` and every remote that reaches it through wrappers.
+        internal static IReadOnlyList<string> WithDependents(IReadOnlyCollection<RcloneRemote> remotes, string name)
+        {
+            var found = new List<string> { name };
+            for (var i = 0; i < found.Count; i++)
+                found.AddRange(DependentsOf(remotes, found[i]).Except(found).ToList());
+            return found;
+        }
+
         internal static async Task RenameInFileAsync(string configPath, string oldName, string newName)
         {
             if (!File.Exists(configPath))
@@ -163,6 +172,13 @@ namespace RcloneMount.Services
         // Terminals opened this run. A restore refuses while one is open: it can rewrite rclone.conf.
         internal static List<Process> Terminals { get; } = new();
 
+        internal static void PruneTerminals() => Terminals.RemoveAll(t =>
+        {
+            if (!t.HasExited) return false;
+            t.Dispose();
+            return true;
+        });
+
         // Console where any rclone command works (config, ncdu, …) against the same rclone.exe
         // and rclone.conf the app uses. UseShellExecute=false so the Environment edits apply.
         public void LaunchTerminal(string? args = null)
@@ -180,6 +196,7 @@ namespace RcloneMount.Services
             psi.Environment["PATH"] = Path.GetDirectoryName(exePath) + ";" + psi.Environment["PATH"];
             psi.Environment["RCLONE_CONFIG"] = SettingsService.ResolveRcloneConfigPath();
             RcloneConfigPassword.AddTo(psi);
+            PruneTerminals();
             if (Process.Start(psi) is { } terminal) Terminals.Add(terminal);
         }
 

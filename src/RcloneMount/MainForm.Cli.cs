@@ -35,7 +35,7 @@ namespace RcloneMount
             // the UI thread: run the whole command there. Show only posts to it, so a second
             // launch is not kept waiting on a busy UI.
             if (req.Command != CliRelay.Command.Show && InvokeRequired)
-                return await Invoke(() => HandleCliRequestAsync(req, ct));
+                return await OnUiThreadAsync(() => HandleCliRequestAsync(req, ct), CliUiWait, ct);
 
             switch (req.Command)
             {
@@ -54,6 +54,34 @@ namespace RcloneMount
             }
         }
 
+        // How long a request waits for the UI thread to take it up. A command under way has its own limits.
+        private static readonly TimeSpan CliUiWait = TimeSpan.FromSeconds(10);
+
+        // Runs `command` on the UI thread. One not started within `wait` (or before a cancel) never runs.
+        private async Task<CliRelay.Response> OnUiThreadAsync(Func<Task<CliRelay.Response>> command, TimeSpan wait, CancellationToken ct)
+        {
+            var started = new TaskCompletionSource<Task<CliRelay.Response>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var claimed = 0; // taken by whoever is first: the UI thread starting, or this thread giving up
+            BeginInvoke(new Action(() =>
+            {
+                if (Interlocked.Exchange(ref claimed, 1) == 0) started.SetResult(command());
+            }));
+
+            Task<CliRelay.Response> running;
+            try { running = await started.Task.WaitAsync(wait, ct).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+            {
+                if (Interlocked.Exchange(ref claimed, 1) == 0)
+                {
+                    if (ex is OperationCanceledException) throw;
+                    return new CliRelay.Response(5,
+                        "RcloneMount: the app is busy (a dialog is open, or it is not responding). Nothing was done; try again.");
+                }
+                running = await started.Task.ConfigureAwait(false); // it began just as we gave up
+            }
+            return await running.WaitAsync(ct).ConfigureAwait(false);
+        }
+
         private CliRelay.Response BuildListReply()
         {
             var entries = new List<CliRelay.MountEntry>(mounts.Count);
@@ -70,6 +98,8 @@ namespace RcloneMount
             var found = FindMountByName(name);
             if (found is null)
                 return new CliRelay.Response(2, $"No mount named '{name}'. Use --list to see configured mounts.");
+
+            found.UnmountedByUser = false; // asked for: also when it cannot start now
 
             if (mountService is null)
                 return new CliRelay.Response(5, "Mount service not initialised — rclone not detected yet.");
@@ -136,7 +166,7 @@ namespace RcloneMount
 
             try
             {
-                await mountService.UnmountAsync(found);
+                await StopMountAsync(found);
             }
             catch (Exception ex)
             {

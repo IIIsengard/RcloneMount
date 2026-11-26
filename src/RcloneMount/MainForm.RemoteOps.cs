@@ -403,34 +403,8 @@ namespace RcloneMount
 
             try
             {
-                if (renamed)
-                {
-                    foreach (var m in mountsToRemount)
-                    {
-                        SetStatus($"Unmounting {m.DriveLetter} before rename...");
-                        try { if (mountService is not null) await mountService.UnmountAsync(m); } catch { }
-                    }
-
-                    SetStatus($"Renaming {oldName} → {newName}...");
-                    await configService.RenameRemoteAsync(oldName, newName);
-
-                    await ApplyRemoteRenameAsync(oldName, newName);
-                }
-
-                SetStatus($"Updating remote {newName}...");
-                await configService.UpdateRemoteAsync(newName, editor.ResultValues, obscurePasswords: true);
-                var pruneNote = editor.KeysToPrune.Count > 0
-                    ? await configService.PruneRemoteAsync(newName, editor.KeysToPrune, rcloneInfo?.Version)
-                    : null;
-                await RefreshRemotesAsync();
-
-                foreach (var m in mountsToRemount)
-                {
-                    SetStatus($"Remounting {m.DriveLetter}...");
-                    try { if (mountService is not null) await mountService.MountAsync(m); }
-                    catch (Exception ex) { activityLog.Error($"Remount of {m.DriveLetter} failed: {ex.Message}"); }
-                }
-                RefreshMountList();
+                var pruneNote = await RenameAndUpdateRemoteAsync(oldName, newName, mountsToRemount,
+                    editor.ResultValues, editor.KeysToPrune);
 
                 SetStatus(renamed
                     ? (mountsToRemount.Count > 0
@@ -444,6 +418,56 @@ namespace RcloneMount
             {
                 MessageBox.Show($"Update failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 SetStatusError("Update failed.", ex);
+            }
+        }
+
+        // Saves an edit, renaming first when the name changed, with the running mounts down around a
+        // rename. Whatever fails, they come back up, under the name rclone.conf then holds.
+        // Returns the note about settings that could not be removed.
+        private async Task<string?> RenameAndUpdateRemoteAsync(string oldName, string newName, IReadOnlyList<Mount> mountsToRemount,
+            IReadOnlyDictionary<string, string> values, IReadOnlySet<string> keysToPrune)
+        {
+            var service = configService!;
+            try
+            {
+                if (!string.Equals(oldName, newName, StringComparison.Ordinal))
+                {
+                    foreach (var m in mountsToRemount)
+                    {
+                        SetStatus($"Unmounting {m.DriveLetter} before rename...");
+                        try { if (mountService is not null) await StopMountAsync(m); } catch { }
+                    }
+
+                    SetStatus($"Renaming {oldName} → {newName}...");
+                    await service.RenameRemoteAsync(oldName, newName);
+
+                    await ApplyRemoteRenameAsync(oldName, newName);
+                }
+
+                SetStatus($"Updating remote {newName}...");
+                await service.UpdateRemoteAsync(newName, values, obscurePasswords: true);
+                var pruneNote = keysToPrune.Count > 0
+                    ? await service.PruneRemoteAsync(newName, keysToPrune, rcloneInfo?.Version)
+                    : null;
+                await RefreshRemotesAsync();
+                return pruneNote;
+            }
+            finally
+            {
+                foreach (var m in mountsToRemount)
+                {
+                    if (mountService is null || m.UnmountedByUser) continue;
+                    SetStatus($"Remounting {m.DriveLetter}...");
+                    try
+                    {
+                        if (!await StartMountAsync(m))
+                            activityLog.Error($"Remount of {m.DriveLetter} failed: no free drive letter.");
+                        else if (await WaitForDriveReadyAsync(m.DriveLetter, TimeSpan.FromSeconds(15)))
+                            ShellNotifier.DriveAdded(m.DriveLetter);
+                    }
+                    catch (Exception ex) { activityLog.Error($"Remount of {m.DriveLetter} failed: {ex.Message}"); }
+                }
+                RefreshMountList();
             }
         }
 
@@ -490,6 +514,8 @@ namespace RcloneMount
                 job.InFlight = false; // never offered for resume; the schedule text stays
                 job.InFlightStartedUtc = null;
             }
+            // A running rclone has read the config already: a sync would go on deleting.
+            jobQueue?.CancelRuns(TransfersUsing(name));
             jobQueue?.RenameRemote(name, mark);
             foreach (var dialog in OwnedForms.OfType<TransferDialog>())
                 dialog.ForgetRemote(name);
@@ -499,9 +525,14 @@ namespace RcloneMount
                 await SaveSettingsAsync();
         }
 
+        // Queued and running transfers that reach `name`, directly or through a wrapper remote.
+        private IReadOnlyList<JobRun> TransfersUsing(string name) =>
+            jobQueue?.ActiveRunsUsing(RcloneConfigService.WithDependents(remotes, name)) ?? Array.Empty<JobRun>();
+
         private const int NamedJobsCap = 10; // keeps the confirmation box on screen
 
-        internal static string DeleteRemoteMessage(string name, IReadOnlyList<Mount> mounts, IReadOnlyList<TransferJob> jobs)
+        internal static string DeleteRemoteMessage(string name, IReadOnlyList<Mount> mounts, IReadOnlyList<TransferJob> jobs,
+            int activeTransfers = 0)
         {
             var inUse = mounts.Any(m => string.Equals(m.RemoteName, name, StringComparison.Ordinal));
             var extra = inUse ? "\n\nWarning: mounts reference this remote and will stop working." : "";
@@ -513,6 +544,8 @@ namespace RcloneMount
                     + string.Join("\n", users.Take(NamedJobsCap));
                 if (users.Count > NamedJobsCap) extra += $"\n  and {users.Count - NamedJobsCap} more";
             }
+            if (activeTransfers > 0)
+                extra += $"\n\n{activeTransfers} running or queued transfer(s) using it will be cancelled.";
             return $"Delete remote '{name}' from rclone.conf?{extra}";
         }
 
@@ -523,7 +556,7 @@ namespace RcloneMount
             if (selected is null) return;
 
             if (ConfirmDialog.Show(this, "Delete service",
-                    DeleteRemoteMessage(selected.Name, mounts, jobs),
+                    DeleteRemoteMessage(selected.Name, mounts, jobs, TransfersUsing(selected.Name).Count),
                     confirmText: "Delete") != DialogResult.Yes)
                 return;
             if (!await UploadsGuardAsync(mounts.Where(m => string.Equals(m.RemoteName, selected.Name, StringComparison.Ordinal)),

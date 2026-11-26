@@ -182,6 +182,19 @@ changes (e.g. `settings.json` shape changes that need a migration).
   could mount an auto-mount drive again; now it waits until you mount it or restart the app.
 - **Renaming a remote can no longer create two with the same name.** The name was not checked
   against remotes listed after the renamed one in `rclone.conf`.
+- **Deleting a remote cancels its queued and running transfers**, also those that reach it
+  through a crypt, alias or union remote. A sync could keep deleting files after the remote
+  was gone. The confirmation says so.
+- **A remote edit that fails remounts your drives.** If a rename or the update after it failed,
+  the drives unmounted for the rename stayed down.
+- **`--unmount` tells Explorer the drive is gone** and shows your chosen drive letter at once.
+- **Command-line requests no longer wait forever on a busy app.** If the app cannot take a
+  `--list`, `--mount` or `--unmount` within 10 seconds, it answers that it is busy and does not
+  run it later.
+- **Asking to mount a drive you had unmounted counts even if the mount cannot start yet**, so
+  automatic remounting can bring it up later.
+- **A skipped automatic backup appears in the log**, for example while `rclone.conf` is locked
+  by another program. Your settings are still saved.
 
 ### Added
 - **Support link.** The About tab and the README link to Buy Me a Coffee.

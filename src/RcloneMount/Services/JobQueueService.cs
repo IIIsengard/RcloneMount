@@ -117,14 +117,24 @@ namespace RcloneMount.Services
         }
 
         // For a deleted saved job: bars its runs from Retry and cancels the queued and running ones.
-        // Queued ones go first, so none of them starts as a running one ends.
         public void CancelJob(string jobId)
         {
             if (jobId.Length == 0) return; // "" marks ad-hoc runs, which belong to no job
-            var own = Snapshot().Where(r => r.JobId == jobId).OrderBy(r => r.State != JobRunState.Queued).ToList();
+            var own = Snapshot().Where(r => r.JobId == jobId).ToList();
             foreach (var run in own) run.JobDeleted = true;
-            foreach (var run in own) Cancel(run.Id);
+            CancelRuns(own);
             RunsChanged?.Invoke(); // finished rows lose their Retry button
+        }
+
+        // The queued and running runs that read or write one of these remotes.
+        public IReadOnlyList<JobRun> ActiveRunsUsing(IReadOnlyCollection<string> remoteNames) =>
+            Snapshot().Where(r => r.IsActive
+                && (remoteNames.Contains(r.Spec.SourceRemote) || remoteNames.Contains(r.Spec.DestRemote))).ToList();
+
+        // Queued ones go first, so none of them starts as a running one ends.
+        public void CancelRuns(IEnumerable<JobRun> targets)
+        {
+            foreach (var run in targets.OrderBy(r => r.State != JobRunState.Queued).ToList()) Cancel(run.Id);
         }
 
         // Queued runs would fail under the old name, or reach a later remote that reuses it. Finished

@@ -17,7 +17,7 @@ namespace RcloneMount.Models
         public string VfsCacheMaxSize { get; set; } = string.Empty;
         public string VfsCacheMinFreeSpace { get; set; } = string.Empty;
         public bool AutoMount { get; set; }
-        // The user unmounted it: nothing automatic mounts it again this session, until a manual mount.
+        // The user unmounted it: nothing automatic mounts it again this session, until they ask to mount it.
         [JsonIgnore] public bool UnmountedByUser { get; set; }
 
         // A copy to save with another letter, leaving the live object alone.

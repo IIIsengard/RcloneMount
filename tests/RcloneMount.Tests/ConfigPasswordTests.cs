@@ -6,10 +6,7 @@ namespace RcloneMount.Tests;
 
 // Runs alone: these tests swap the stored-password path and set RCLONE_CONFIG for the whole
 // process, and the user's real stored password and rclone.conf must never be touched.
-[CollectionDefinition(nameof(ConfigPasswordTests), DisableParallelization = true)]
-public class ConfigPasswordCollection { }
-
-[Collection(nameof(ConfigPasswordTests))]
+[Collection(nameof(SharedStatics))]
 public class ConfigPasswordTests : IDisposable
 {
     // Distinctive, so a leak into stderr or failure text is unmistakable.

@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
@@ -8,6 +10,7 @@ using RcloneMount.Services;
 namespace RcloneMount.Tests;
 
 // Every way of mounting and the CLI commands. rclone.exe does not exist: nothing is ever mounted.
+[Collection(nameof(SharedStatics))] // asserts on the stored-password path
 public class CliMountTests
 {
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -38,7 +41,9 @@ public class CliMountTests
             var threads = new List<int>();
             void Seen(object? _, FirstChanceExceptionEventArgs e)
             {
-                if (e.Exception is NullReferenceException && e.Exception.StackTrace?.Contains("RcloneMount.") == true)
+                // Only where the mounts are read: the event also sees every other thread's exceptions.
+                if (e.Exception is NullReferenceException && e.Exception.StackTrace is { } stack
+                    && (stack.Contains("RcloneMountService.IsMounted") || stack.Contains("FindMountByName")))
                     lock (threads) threads.Add(Environment.CurrentManagedThreadId);
             }
             AppDomain.CurrentDomain.FirstChanceException += Seen;
@@ -157,6 +162,146 @@ public class CliMountTests
 
         Assert.Single(retries);
         retries[rig.Mount!.Id].Cancel();
+    }
+
+    // "C:" stands for the configured letter; the revert must not wait for rclone's exit event.
+    [Fact]
+    public async Task CliUnmount_OfAFallbackMount_ShowsTheConfiguredLetterAtOnce()
+    {
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = UnusedLetter() });
+        using var service = rig.Service;
+        rig.Configured[rig.Mount!.Id] = "C:";
+        PretendMounted(service, rig.Mount);
+
+        var reply = await Invoke<Task<CliRelay.Response>>(rig.Form, "CliUnmountAsync", "r");
+
+        Assert.Equal(0, reply.ExitCode);
+        AssertBackOnConfiguredLetter(rig, "C:");
+    }
+
+    // Asking for a mount means "I want it up", also when it cannot start right now.
+    [Theory]
+    [InlineData("MountAsync")]
+    [InlineData("MountFromTrayAsync")]
+    [InlineData("CliMountAsync")]
+    public async Task ManualMount_ThatStopsEarly_NoLongerCountsAsUnmountedByTheUser(string mount)
+    {
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = UnusedLetter() });
+        using var service = rig.Service;
+        rig.Mount!.UnmountedByUser = true;
+        // Nothing to start it with: no rclone for the button (without WinFsp it opens a dialog), no WinFsp for the others.
+        Field(mount == "MountAsync" ? "mountService" : "winFspInfo").SetValue(rig.Form, null);
+
+        await Invoke<Task>(rig.Form, mount,
+            mount == "CliMountAsync" ? new object[] { "r", CancellationToken.None } : new object[] { rig.Mount });
+
+        Assert.False(rig.Mount.UnmountedByUser);
+    }
+
+    // The UI thread takes no messages here: the request must still end, and not run once it does.
+    [Fact]
+    public void CliRequest_ToABusyUiThread_EndsOnCancel_AndNeverRunsLater() => WithUiThread(
+        new Mount { RemoteName = "r", DriveLetter = "C:" },
+        (form, rig, pump) =>
+        {
+            using var stop = new CancellationTokenSource(300);
+            var call = Task.Run(() => Invoke<Task<CliRelay.Response>>(
+                form, "HandleCliRequestAsync", new CliRelay.Request(CliRelay.Command.Mount, "r"), stop.Token));
+            var ended = EndsWithoutPumping(call);
+            Application.DoEvents(); // the UI thread is free again
+
+            Assert.True(ended, "the CLI request ignored its cancellation");
+            Assert.True(call.IsCanceled);
+            Assert.Empty(rig.Logged);
+        });
+
+    // A rename that fails, or whose update then fails, still brings the unmounted drives back.
+    [Theory]
+    [InlineData("new", "new")] // renamed, then the update fails: there is no rclone.exe
+    [InlineData("taken", "r")] // the rename itself is refused
+    public async Task EditRemote_ThatFails_RemountsUnderTheNameInRcloneConf(string newName, string inConf)
+    {
+        var rig = NewRig(new Mount { RemoteName = "r", DriveLetter = UnusedLetter() });
+        using var service = rig.Service;
+        var mount = rig.Mount!;
+        Field("jobs").SetValue(rig.Form, new List<TransferJob>());
+        Field("configService").SetValue(rig.Form, new RcloneConfigService(NoRclone));
+        var conf = SettingsService.ResolveRcloneConfigPath();
+        Assert.StartsWith(TestIsolation.Dir, conf);
+        Directory.CreateDirectory(Path.GetDirectoryName(conf)!);
+        File.WriteAllText(conf, "[r]\r\ntype = local\r\n\r\n[taken]\r\ntype = local\r\n");
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => Invoke<Task>(rig.Form, "RenameAndUpdateRemoteAsync",
+                "r", newName, new List<Mount> { mount }, new Dictionary<string, string>(), new HashSet<string>()));
+
+            Assert.Equal(inConf, mount.RemoteName);
+            Assert.Single(rig.Logged, e => e.Message.StartsWith($"Remount of {mount.DriveLetter} failed"));
+        }
+        finally { File.Delete(conf); }
+    }
+
+    [Fact]
+    public void CliRequest_TheUiThreadDoesNotTakeUp_IsAnsweredBusy_AndNeverRunsLater() => WithUiThread(
+        null,
+        (form, rig, pump) =>
+        {
+            var ran = false;
+            Func<Task<CliRelay.Response>> command = () => { ran = true; return Task.FromResult(new CliRelay.Response(0, "")); };
+            var call = Task.Run(() => Invoke<Task<CliRelay.Response>>(
+                form, "OnUiThreadAsync", command, TimeSpan.FromMilliseconds(200), CancellationToken.None));
+            var ended = EndsWithoutPumping(call);
+            Application.DoEvents();
+
+            Assert.True(ended, "the CLI request was not answered");
+            var reply = call.GetAwaiter().GetResult();
+            Assert.Equal(5, reply.ExitCode);
+            Assert.Contains("busy (a dialog is open", reply.Message);
+            Assert.False(ran);
+        });
+
+    // The wait is for the start only: a command that takes longer still gets its own reply.
+    [Fact]
+    public void CliRequest_ThatStarted_IsAnsweredHoweverLongItTakes() => WithUiThread(
+        null,
+        (form, rig, pump) =>
+        {
+            Func<Task<CliRelay.Response>> command = async () =>
+            {
+                await Task.Delay(2500);
+                return new CliRelay.Response(0, "done");
+            };
+            var call = Task.Run(() => Invoke<Task<CliRelay.Response>>(
+                form, "OnUiThreadAsync", command, TimeSpan.FromSeconds(1), CancellationToken.None));
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!call.IsCompleted && DateTime.UtcNow < deadline)
+            {
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+
+            Assert.True(call.IsCompleted, "the CLI request was not answered");
+            Assert.Equal("done", call.GetAwaiter().GetResult().Message);
+        });
+
+    private static bool EndsWithoutPumping(Task call)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!call.IsCompleted && DateTime.UtcNow < deadline) Thread.Sleep(10);
+        return call.IsCompleted;
+    }
+
+    // A running mount needs a process: a cmd.exe waiting on its input stands in for rclone.
+    private static void PretendMounted(RcloneMountService service, Mount mount)
+    {
+        var process = Process.Start(new ProcessStartInfo("cmd.exe", "/c set /p x=")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
+        })!;
+        var type = typeof(RcloneMountService).GetNestedType("MountProcess", BindingFlags.NonPublic)!;
+        var processes = (IDictionary)typeof(RcloneMountService).GetField("processes", Private)!.GetValue(service)!;
+        processes[mount.Id] = Activator.CreateInstance(type, process, 1, 0); // port 0: no rclone to ask
+        Assert.True(service.IsMounted(mount));
     }
 
     private sealed record Rig(MainForm Form, Mount? Mount, List<Mount> Mounts, RcloneMountService Service,
