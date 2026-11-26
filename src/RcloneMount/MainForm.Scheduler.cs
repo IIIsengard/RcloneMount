@@ -54,7 +54,7 @@ namespace RcloneMount
             var now = DateTimeOffset.Now;
             foreach (var job in jobs)
             {
-                if (string.IsNullOrWhiteSpace(job.Schedule)) continue;
+                if (string.IsNullOrWhiteSpace(job.Schedule) || job.DeletedRemote() is not null) continue;
                 if (!Schedule.TryParse(job.Schedule, out _, out var error))
                 {
                     // Hand-edited or from a newer version: say so once instead of never running silently.

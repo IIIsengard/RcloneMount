@@ -104,6 +104,14 @@ namespace RcloneMount.UI
                 lblLast.Text = "never run";
             }
             lblLast.Text += NextRunLabel(job);
+            // A stopped job says why, in the route line: it is wide enough and always visible.
+            lblRoute.ForeColor = Theme.TextSecondary;
+            if (job.DeletedRemote() is { } deleted)
+            {
+                lblRoute.Text = $"Not running: remote \"{deleted}\" was deleted. Edit to pick a remote.";
+                lblRoute.ForeColor = Theme.Critical;
+                lblLast.Text = "";
+            }
             RepositionActions();
         }
 

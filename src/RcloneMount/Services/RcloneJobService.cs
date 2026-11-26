@@ -164,7 +164,8 @@ namespace RcloneMount.Services
         // still land in history, just without a job stamp.
         public async Task<JobResult> RunAsync(JobSpec spec, IProgress<JobProgress> progress, CancellationToken ct, string jobName = "")
         {
-            if ((RcloneRemote.DriveLetterError(spec.SourceRemote) ?? RcloneRemote.DriveLetterError(spec.DestRemote)) is { } nameError)
+            if ((RcloneRemote.DeletedError(spec.SourceRemote) ?? RcloneRemote.DeletedError(spec.DestRemote)
+                    ?? RcloneRemote.DriveLetterError(spec.SourceRemote) ?? RcloneRemote.DriveLetterError(spec.DestRemote)) is { } nameError)
                 throw new InvalidOperationException(nameError);
 
             var rcPort = ReserveFreeLoopbackPort();

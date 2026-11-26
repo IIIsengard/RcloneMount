@@ -22,6 +22,7 @@ namespace RcloneMount.UI
         private readonly Dictionary<string, string> workingValues;
 
         private readonly TextBox txtName;
+        private readonly string nameLockedReason;
         private readonly Label lblType;
         private readonly CheckBox chkShowAdvanced;
         private readonly Panel panelFields;
@@ -64,7 +65,8 @@ namespace RcloneMount.UI
                               IReadOnlyDictionary<string, string>? existing,
                               string? existingName,
                               IEnumerable<string> takenRemoteNames,
-                              bool lockName = false)
+                              bool lockName = false,
+                              IReadOnlyList<string>? dependents = null)
         {
             this.provider = provider;
             initialValues = existing is null
@@ -73,6 +75,10 @@ namespace RcloneMount.UI
             workingValues = new Dictionary<string, string>(initialValues, StringComparer.Ordinal);
             isEdit = existingName is not null;
             takenNames = takenRemoteNames.ToHashSet(StringComparer.Ordinal);
+            // rclone's own rename leaves wrapping remotes on the old name, and this app cannot rewrite them here.
+            nameLockedReason = dependents is { Count: > 0 }
+                ? $"{LockedNameReason} Then change these remotes, which point at it: {string.Join(", ", dependents)}."
+                : LockedNameReason;
 
             Icon = AppIcon.Get();
             Text = isEdit ? $"Edit remote — {existingName}" : $"New remote — {ProviderVisuals.FriendlyType(provider)}";
@@ -89,7 +95,7 @@ namespace RcloneMount.UI
                 Text = existingName ?? "",
                 // Read-only rather than disabled: still focusable, so screen readers reach the reason.
                 ReadOnly = lockName,
-                AccessibleDescription = lockName ? LockedNameReason : null,
+                AccessibleDescription = lockName ? nameLockedReason : null,
             };
             // Land the cursor at the end without a selection highlight when this box gets
             // focus, so pre-filled names read as normal dark text instead of a bright-blue
@@ -220,7 +226,8 @@ namespace RcloneMount.UI
             {
                 var nameReason = new Label
                 {
-                    Text = LockedNameReason,
+                    UseMnemonic = false,
+                    Text = nameLockedReason,
                     Location = new Point(inputX, y + 28),
                     MaximumSize = new Size(inputWidth, 0),
                     AutoSize = true,

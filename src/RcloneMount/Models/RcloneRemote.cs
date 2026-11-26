@@ -9,6 +9,20 @@ namespace RcloneMount.Models
         public string Type { get; set; } = string.Empty;
         public Dictionary<string, string> Parameters { get; set; } = new();
 
+        // What a saved job or queued run holds once its remote is deleted. '<' is not allowed in a
+        // remote name, so no later remote can match it, and rclone itself refuses it.
+        private const string DeletedMark = "<deleted> ";
+
+        internal static string MarkDeleted(string name) => DeletedMark + name;
+
+        // The deleted remote's name, or null when `remote` is not such a mark.
+        internal static string? DeletedName(string remote) =>
+            remote?.StartsWith(DeletedMark, System.StringComparison.Ordinal) == true // null: hand-edited settings
+                ? remote[DeletedMark.Length..] : null;
+
+        internal static string? DeletedError(string remote) =>
+            DeletedName(remote) is { } name ? $"Remote \"{name}\" was deleted. Edit the job and pick a remote." : null;
+
         // The same list, in the same order, with one remote under its new name.
         internal static RcloneRemote[] Renamed(IEnumerable<RcloneRemote> remotes, string oldName, string newName) =>
             remotes.Select(r => r.Name != oldName ? r

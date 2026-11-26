@@ -362,7 +362,8 @@ namespace RcloneMount
             // Encrypted rclone.conf can't be renamed from here (RenameRemoteAsync refuses it too),
             // so the name is locked up front and no other edit is lost to that refusal.
             using var editor = new EditRemoteForm(provider, selected.Parameters, selected.Name, others,
-                lockName: RcloneConfigPassword.IsEncrypted(SettingsService.ResolveRcloneConfigPath()));
+                lockName: RcloneConfigPassword.IsEncrypted(SettingsService.ResolveRcloneConfigPath()),
+                dependents: RcloneConfigService.DependentsOf(remotes, selected.Name));
             if (editor.ShowDialog(this) != DialogResult.OK)
                 return;
 
@@ -449,16 +450,10 @@ namespace RcloneMount
         // open transfer windows. Whatever kept the old name would fail, or reach a later remote reusing it.
         private async Task ApplyRemoteRenameAsync(string oldName, string newName)
         {
-            var changed = false;
+            var changed = RepointJobs(oldName, newName).Count > 0;
             foreach (var m in mounts.Where(m => m.RemoteName == oldName))
             {
                 m.RemoteName = newName;
-                changed = true;
-            }
-            foreach (var job in jobs.Where(j => j.SourceRemote == oldName || j.DestRemote == oldName))
-            {
-                if (job.SourceRemote == oldName) job.SourceRemote = newName;
-                if (job.DestRemote == oldName) job.DestRemote = newName;
                 changed = true;
             }
             // A window opened before the next refresh must already see the new name.
@@ -468,6 +463,38 @@ namespace RcloneMount
                 dialog.RenameRemote(oldName, newName);
             RefreshJobsList();
             if (changed)
+                await SaveSettingsAsync();
+        }
+
+        // Renames a remote in the saved jobs; returns the jobs that used it.
+        private List<TransferJob> RepointJobs(string oldName, string newName)
+        {
+            var users = jobs.Where(j => j.SourceRemote == oldName || j.DestRemote == oldName).ToList();
+            foreach (var job in users)
+            {
+                if (job.SourceRemote == oldName) job.SourceRemote = newName;
+                if (job.DestRemote == oldName) job.DestRemote = newName;
+            }
+            return users;
+        }
+
+        // After a delete, nothing that named the remote may reach a later one of the same name: jobs,
+        // queued runs and open windows keep a "deleted" mark until the user picks a remote again.
+        private async Task ApplyRemoteDeletedAsync(string name)
+        {
+            var mark = RcloneRemote.MarkDeleted(name);
+            var users = RepointJobs(name, mark);
+            foreach (var job in users)
+            {
+                job.InFlight = false; // never offered for resume; the schedule text stays
+                job.InFlightStartedUtc = null;
+            }
+            jobQueue?.RenameRemote(name, mark);
+            foreach (var dialog in OwnedForms.OfType<TransferDialog>())
+                dialog.ForgetRemote(name);
+            remotes = remotes.Where(r => r.Name != name).ToArray();
+            RefreshJobsList();
+            if (users.Count > 0)
                 await SaveSettingsAsync();
         }
 
@@ -481,7 +508,8 @@ namespace RcloneMount
                 .Select(j => "  • " + (string.IsNullOrWhiteSpace(j.Name) ? "(unnamed)" : j.Name)).ToList();
             if (users.Count > 0)
             {
-                extra += "\n\nThese saved jobs use it and will stop working:\n" + string.Join("\n", users.Take(NamedJobsCap));
+                extra += "\n\nThese saved jobs use it. They will not run until you edit each one and pick a remote:\n"
+                    + string.Join("\n", users.Take(NamedJobsCap));
                 if (users.Count > NamedJobsCap) extra += $"\n  and {users.Count - NamedJobsCap} more";
             }
             return $"Delete remote '{name}' from rclone.conf?{extra}";
@@ -504,6 +532,7 @@ namespace RcloneMount
             try
             {
                 await configService.DeleteRemoteAsync(selected.Name);
+                await ApplyRemoteDeletedAsync(selected.Name); // first: the name may be created again at any time
 
                 // Unmount + drop any mounts that pointed at this remote. Without
                 // this they'd stay in settings.json as orphans and re-inflate the

@@ -63,7 +63,47 @@ namespace RcloneMount.Services
             if (string.Equals(oldName, newName, StringComparison.Ordinal))
                 return;
 
-            var configPath = SettingsService.ResolveRcloneConfigPath();
+            await RenameInFileAsync(SettingsService.ResolveRcloneConfigPath(), oldName, newName).ConfigureAwait(false);
+        }
+
+        // One rclone.conf setting with its "oldName:path" references moved to newName. Only wrapping
+        // backends hold them: "remote" (alias, crypt, chunker, compress, hasher, cache, archive) and
+        // "upstreams" (union, combine), a space-separated list whose items may be quoted.
+        internal static string RepointValue(string type, string key, string value, string oldName, string newName)
+        {
+            // rclone reads "c:..." as a drive, so it never referred to a one-letter remote.
+            if (RcloneRemote.DriveLetterError(oldName) is not null) return value;
+            if (key == "remote") return RepointSpec(value, oldName, newName);
+            if (key != "upstreams") return value;
+            return Regex.Replace(value, @"""(?:[^""]|"""")*""|[^ ]+", match =>
+            {
+                var raw = match.Value;
+                var quoted = raw.Length > 1 && raw[0] == '"' && raw[^1] == '"';
+                var item = quoted ? raw[1..^1].Replace("\"\"", "\"") : raw;
+                var start = type == "combine" ? item.IndexOf('=') + 1 : 0; // combine items are dir=remote:path
+                var changed = item[..start] + RepointSpec(item[start..], oldName, newName);
+                if (changed == item) return raw;
+                return quoted || changed.Contains(' ') ? "\"" + changed.Replace("\"", "\"\"") + "\"" : changed;
+            });
+        }
+
+        // "name:path", or "name,option=x:path" with settings overridden inline. Anything else is a local path.
+        private static string RepointSpec(string spec, string oldName, string newName)
+        {
+            if (spec.Length <= oldName.Length || !spec.StartsWith(oldName, StringComparison.Ordinal)) return spec;
+            var next = spec[oldName.Length];
+            return next == ':' || (next == ',' && spec.IndexOf(':', oldName.Length) >= 0)
+                ? newName + spec[oldName.Length..]
+                : spec;
+        }
+
+        // The remotes whose settings point at `name`.
+        internal static IReadOnlyList<string> DependentsOf(IEnumerable<RcloneRemote> remotes, string name) =>
+            remotes.Where(r => r.Parameters.Any(p => RepointValue(r.Type, p.Key, p.Value, name, name + "_") != p.Value))
+                .Select(r => r.Name).ToList();
+
+        internal static async Task RenameInFileAsync(string configPath, string oldName, string newName)
+        {
             if (!File.Exists(configPath))
                 throw new FileNotFoundException("rclone.conf not found.", configPath);
             if (RcloneConfigPassword.IsEncrypted(configPath))
@@ -87,8 +127,37 @@ namespace RcloneMount.Services
             if (!replaced)
                 throw new InvalidOperationException($"Section [{oldName}] not found in rclone.conf.");
 
+            // Remotes that wrap the renamed one would break, or reach a later remote reusing the name.
+            // Same write as the header, so the file never holds one without the other.
+            var type = "";
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].StartsWith('['))
+                {
+                    type = SectionType(lines, i);
+                    continue;
+                }
+                var eq = lines[i].IndexOf('=');
+                if (eq <= 0) continue;
+                var key = lines[i][..eq].Trim();
+                var value = lines[i][(eq + 1)..].Trim();
+                // rclone's config writer wraps some values (# or ; in a path) in backticks or triple quotes.
+                var wrap = ConfigQuotes.FirstOrDefault(q => value.Length >= 2 * q.Length
+                    && value.StartsWith(q, StringComparison.Ordinal) && value.EndsWith(q, StringComparison.Ordinal)) ?? "";
+                var inner = value[wrap.Length..^wrap.Length];
+                var repointed = RepointValue(type, key, inner, oldName, newName);
+                if (repointed != inner) lines[i] = $"{key} = {wrap}{repointed}{wrap}";
+            }
+
             SettingsService.WriteAtomic(configPath, string.Join("\r\n", lines) + "\r\n");
         }
+
+        private static readonly string[] ConfigQuotes = { "\"\"\"", "`" };
+
+        private static string SectionType(string[] lines, int header) =>
+            lines.Skip(header + 1).TakeWhile(l => !l.StartsWith('['))
+                .Select(l => l.Split('=', 2))
+                .FirstOrDefault(kv => kv.Length == 2 && kv[0].Trim() == "type")?[1].Trim() ?? "";
 
         // Console where any rclone command works (config, ncdu, …) against the same rclone.exe
         // and rclone.conf the app uses. UseShellExecute=false so the Environment edits apply.

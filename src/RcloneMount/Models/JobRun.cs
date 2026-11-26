@@ -28,6 +28,9 @@ namespace RcloneMount.Models
 
         public JobSpec Spec { get; internal set; } = new(); // replaced only when a remote is renamed
 
+        // The saved job this run came from was deleted: it must not be retried.
+        public bool JobDeleted { get; internal set; }
+
         public JobRunState State { get; set; } = JobRunState.Queued;
 
         public DateTime QueuedUtc { get; init; } = DateTime.UtcNow;

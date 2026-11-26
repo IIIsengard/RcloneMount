@@ -433,6 +433,7 @@ public class UiTextTests
         Assert.Contains("from it", message);
         Assert.Contains("to it", message);
         Assert.Contains("(unnamed)", message);
+        Assert.Contains("will not run", message);
         Assert.DoesNotContain("elsewhere", message);
         Assert.DoesNotContain("job", MainForm.DeleteRemoteMessage("unused", Array.Empty<Mount>(), jobs));
     }
@@ -515,6 +516,125 @@ public class UiTextTests
 
         Assert.DoesNotContain("cancelled", asked); // nothing was running when asked
         Assert.Equal(JobRunState.Cancelled, late!.State);
+    });
+
+    // A deleted remote's jobs must not reach a later remote of the same name until the user picks again.
+    [Fact]
+    public void DeletingARemote_StopsItsJobsEvenIfTheNameComesBack() => Sta(() =>
+    {
+        var form = Shell();
+        var remotes = new[] { new RcloneRemote { Name = "gone", Type = "mega" }, new RcloneRemote { Name = "r", Type = "mega" } };
+        Set(form, "remotes", remotes);
+        Set(form, "jobService", new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe")));
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        Set(form, "scheduledInFlight", new HashSet<string>()); // field initializers did not run
+        Set(form, "invalidScheduleWarned", new HashSet<string>());
+        var job = SavedJob();
+        job.SourceRemote = "gone";
+        job.Schedule = "daily 00:00";
+        job.LastScheduledFireUtc = DateTime.UtcNow.AddDays(-3); // due now
+        job.InFlight = true;
+        var other = new TransferJob { Id = "b", SourceRemote = "r", DestRemote = "" };
+        ((List<TransferJob>)Get(form, "jobs")!).AddRange(new[] { job, other });
+        queue.Enqueue(new JobSpec { SourceRemote = "gone", DestRemote = "r" }, "queued", "a");
+        var started = new List<string>();
+        using var open = new TransferDialog(remotes, (_, _, id) => started.Add(id), "gone", "s",
+            saveCallback: _ => { }, existingJob: job);
+        open.Owner = form;
+
+        WithoutSaving(() =>
+        {
+            Call(form, "ApplyRemoteDeletedAsync", "gone");
+            Call(form, "SchedulerTick");
+        });
+
+        Assert.Equal("gone", job.DeletedRemote());
+        Assert.Equal("daily 00:00", job.Schedule);
+        Assert.False(job.InFlight); // not offered for resume
+        Assert.Equal(("r", ""), (other.SourceRemote, other.DestRemote));
+        Assert.Null(other.DeletedRemote());
+        var queued = Assert.Single(queue.Snapshot()); // and the scheduler added nothing
+        Assert.NotEqual("gone", queued.Spec.SourceRemote);
+        // The open window: that side must be picked again, the other keeps its remote.
+        Assert.Equal(-1, ((ThemedDropDown)Of(open, "cbSourceRemote")).SelectedIndex);
+        Assert.StartsWith("r (", ((ThemedDropDown)Of(open, "cbDestRemote")).SelectedText);
+        Assert.False(((Button)Of(open, "btnStart")).Enabled);
+        Assert.False(((Button)Of(open, "btnSave")).Enabled);
+        Assert.Contains("\"gone\" was deleted", ((Label)Of(open, "lblMissingRemote")).Text);
+
+        // The name is created again: every way of running the saved job still refuses it.
+        using var reopened = new TransferDialog(remotes, null, job.SourceRemote, "s", saveCallback: _ => { }, existingJob: job);
+        Assert.Equal(-1, ((ThemedDropDown)Of(reopened, "cbSourceRemote")).SelectedIndex);
+        Assert.False(((Button)Of(reopened, "btnStart")).Enabled);
+        Assert.Contains("\"gone\" was deleted", ((Label)Of(reopened, "lblMissingRemote")).Text);
+        var error = Assert.Throws<InvalidOperationException>(() => new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe"))
+            .RunAsync(MainForm.BuildSpecFromSaved(job), new Progress<JobProgress>(), CancellationToken.None).GetAwaiter().GetResult());
+        Assert.Contains("was deleted", error.Message);
+
+        using var row = new JobRow();
+        row.Bind(job);
+        Assert.Contains(All<Label>(row), l => l.Text.Contains("\"gone\" was deleted"));
+        Assert.DoesNotContain(All<Label>(row), l => l.Text.Contains("next run"));
+
+        // Picking a remote and saving brings it back.
+        ((ThemedDropDown)Of(reopened, "cbSourceRemote")).SelectedIndex = 1;
+        Assert.True(((Button)Of(reopened, "btnSave")).Enabled);
+    });
+
+    // Saving the repaired job must not "catch up" and sync at once.
+    [Fact]
+    public void PickingARemoteAgain_RestartsTheScheduleFromNow()
+    {
+        var old = DateTime.UtcNow.AddDays(-3);
+        var stopped = new TransferJob { Id = "a", SourceRemote = "<deleted> gone", Schedule = "daily 00:00", LastScheduledFireUtc = old };
+        var jobs = new List<TransferJob> { stopped };
+
+        MainForm.UpsertInto(jobs, new TransferJob { Id = "a", SourceRemote = "r", Schedule = "daily 00:00" });
+
+        Assert.True(jobs[0].LastScheduledFireUtc > DateTime.UtcNow.AddMinutes(-1));
+        Assert.True(Schedule.NextRunOf(jobs[0], DateTimeOffset.Now) > DateTimeOffset.Now);
+    }
+
+    [Fact]
+    public void RetryOfADeletedJobsRun_DoesNothing_AndTheButtonIsGone() => Sta(() =>
+    {
+        var form = Shell();
+        var job = SavedJob();
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        var finished = queue.Enqueue(new JobSpec(), "failed earlier", "a");
+        finished.State = JobRunState.Failed;
+        var waiting = queue.Enqueue(new JobSpec(), "waiting", "a");
+        var other = queue.Enqueue(new JobSpec(), "other job", "b");
+        other.State = JobRunState.Failed;
+        Set(form, "confirmJobDelete", new Func<string, DialogResult>(_ => DialogResult.Yes));
+
+        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+
+        Assert.Null(queue.Retry(finished.Id));
+        Assert.Null(queue.Retry(waiting.Id));
+        Assert.Equal(3, queue.Snapshot().Count);
+        using var row = new QueueRow();
+        Button Retry() => (Button)typeof(QueueRow).GetField("btnRetry", Private)!.GetValue(row)!;
+        row.Bind(finished);
+        Assert.False(Retry().Visible);
+        row.Bind(other);
+        Assert.True(Retry().Visible);
+        Assert.NotNull(queue.Retry(other.Id));
+    });
+
+    [Fact]
+    public void EditRemoteForm_LockedName_ListsTheRemotesToUpdateByHand() => Sta(() =>
+    {
+        using var form = new EditRemoteForm(new RcloneProvider { Name = "local" }, null, "old", Array.Empty<string>(),
+            lockName: true, dependents: new[] { "sec", "pool" });
+
+        var reason = All<Label>(form).Single(l => l.Text.Contains("rclone.conf is encrypted")).Text;
+
+        Assert.Contains("sec, pool", reason);
+        Assert.Contains("sec, pool", ((TextBox)typeof(EditRemoteForm).GetField("txtName", Private)!.GetValue(form)!).AccessibleDescription);
     });
 
     // Never starts anything, so queued runs stay queued.

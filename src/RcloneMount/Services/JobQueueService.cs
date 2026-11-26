@@ -116,13 +116,15 @@ namespace RcloneMount.Services
             RunsChanged?.Invoke();
         }
 
-        // Cancels every queued and running run of a saved job. Queued ones go first, so none of
-        // them starts as a running one ends.
+        // For a deleted saved job: bars its runs from Retry and cancels the queued and running ones.
+        // Queued ones go first, so none of them starts as a running one ends.
         public void CancelJob(string jobId)
         {
             if (jobId.Length == 0) return; // "" marks ad-hoc runs, which belong to no job
-            foreach (var run in Snapshot().Where(r => r.JobId == jobId && r.IsActive).OrderBy(r => r.State != JobRunState.Queued))
-                Cancel(run.Id);
+            var own = Snapshot().Where(r => r.JobId == jobId).OrderBy(r => r.State != JobRunState.Queued).ToList();
+            foreach (var run in own) run.JobDeleted = true;
+            foreach (var run in own) Cancel(run.Id);
+            RunsChanged?.Invoke(); // finished rows lose their Retry button
         }
 
         // Queued runs would fail under the old name, or reach a later remote that reuses it. Finished
@@ -141,7 +143,7 @@ namespace RcloneMount.Services
         {
             JobRun? original;
             lock (gate) original = runs.FirstOrDefault(r => r.Id == runId);
-            if (original is null) return null;
+            if (original is null || original.JobDeleted) return null;
             return Enqueue(original.Spec, original.DisplayName, original.JobId);
         }
 

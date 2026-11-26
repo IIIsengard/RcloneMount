@@ -185,7 +185,7 @@ namespace RcloneMount.UI
 
             // Action visibility per state.
             btnCancel.Visible = run.State is JobRunState.Queued or JobRunState.Running;
-            btnRetry.Visible  = run.State is JobRunState.Failed or JobRunState.Cancelled;
+            btnRetry.Visible  = run.State is JobRunState.Failed or JobRunState.Cancelled && !run.JobDeleted;
             btnRemove.Visible = run.IsTerminal;
 
             RepositionActions();

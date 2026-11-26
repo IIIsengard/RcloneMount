@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using RcloneMount.Models;
 using RcloneMount.Services;
@@ -53,8 +54,8 @@ namespace RcloneMount.UI
         private readonly TextBox txtExtraFlags;
         private FilterRules filters = new();
         // Names this dialog was opened with; shown when one of them is not in the remote list.
-        private readonly string seedSourceName;
-        private readonly string seedDestName;
+        private string seedSourceName;
+        private string seedDestName;
         private readonly bool remoteListRead; // false: a name not in `remotes` may still be configured
         private readonly Label lblMissingRemote;
         private readonly Button btnSave;
@@ -325,6 +326,26 @@ namespace RcloneMount.UI
             cbDestRemote.Invalidate();
         }
 
+        // The app deleted a remote while this window is open: that side must be picked again.
+        internal void ForgetRemote(string name)
+        {
+            var matched = InputSnapshot().Equals(savedInputs);
+            var source = ResolveRemoteName(cbSourceRemote);
+            var dest = ResolveRemoteName(cbDestRemote);
+            if (source == name) source = seedSourceName = RcloneRemote.MarkDeleted(name);
+            if (dest == name) dest = seedDestName = RcloneRemote.MarkDeleted(name);
+            remotes = remotes.Where(r => r.Name != name).ToArray();
+            foreach (var (drop, selected) in new[] { (cbSourceRemote, source), (cbDestRemote, dest) })
+            {
+                drop.ClearItems();
+                drop.AddItem("(Local disk)");
+                foreach (var r in remotes) drop.AddItem(RemoteItem(r));
+                drop.SelectedIndex = selected is null ? -1 : IndexOfRemote(selected);
+            }
+            SyncOptionVisibility();
+            if (matched) savedInputs = InputSnapshot(); // list positions moved, the choices did not
+        }
+
         // -1 (nothing selected) for a name that is not in the list: never substitute another remote.
         private int IndexOfRemote(string name)
         {
@@ -349,6 +370,7 @@ namespace RcloneMount.UI
         private string MissingRemoteNote(ThemedDropDown cb, string side, string name)
         {
             var note = cb.SelectedIndex >= 0 ? ""
+                : RcloneRemote.DeletedName(name) is { } deleted ? $"{side} remote \"{deleted}\" was deleted. Pick another one."
                 : remoteListRead ? $"{side} remote \"{name}\" is not in your rclone config. Pick another one."
                 : $"{side} remote \"{name}\": the remote list could not be read. Click Refresh in the main window, then close and reopen this window.";
             cb.AccessibleDescription = note;

@@ -646,6 +646,10 @@ namespace RcloneMount
             // daily stamp could start a sync or move within 30 s of saving.
             if (incoming.Schedule != old.Schedule && Schedule.TryParse(incoming.Schedule, out var s, out _) && s is { IsInterval: true })
                 incoming.LastScheduledFireUtc = null;
+            // A job stopped by a deleted remote restarts its schedule now: catching up on a missed
+            // time could start a sync or move the moment it is saved.
+            if (old.DeletedRemote() is not null && incoming.DeletedRemote() is null)
+                incoming.LastScheduledFireUtc = DateTime.UtcNow;
             incoming.LastRunUtc = old.LastRunUtc;
             incoming.LastResultKind = old.LastResultKind;
             incoming.InFlight = old.InFlight;

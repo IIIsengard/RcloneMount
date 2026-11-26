@@ -48,7 +48,12 @@ changes (e.g. `settings.json` shape changes that need a migration).
   after the job was gone. The confirmation says so.
 - **Renaming a remote updates saved jobs**, queued transfers and open transfer windows, not
   only mounts.
-- **Deleting a remote names the saved jobs that use it** before you confirm.
+- **Deleting a remote names the saved jobs that use it** before you confirm. Those jobs stop
+  running, also on their schedule, until you edit each one and pick a remote, even if a new
+  remote gets the old name. The Jobs list says why.
+- **Renaming a remote also updates remotes that wrap it** (crypt, alias, union, combine and
+  others) in `rclone.conf`. For an encrypted config, the edit window lists the ones to change.
+- **Retry no longer re-runs a deleted job.**
 - **Screen readers** now read the selected value of the app's drop-down lists.
 - **The transfer window no longer calls a remote missing when the remote list could not be
   read.** It tells you to refresh instead.
