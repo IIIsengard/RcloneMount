@@ -31,6 +31,7 @@ namespace RcloneMount.UI
                 if (selectedIndex == value) return;
                 selectedIndex = value;
                 Invalidate();
+                AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
                 SelectedIndexChanged?.Invoke(this, EventArgs.Empty);
             }
         }
@@ -67,6 +68,7 @@ namespace RcloneMount.UI
             items.Clear();
             selectedIndex = -1;
             Invalidate();
+            AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
         }
 
         public void AddItem(object item) => items.Add(item);
@@ -74,6 +76,17 @@ namespace RcloneMount.UI
         public void AddItems(IEnumerable<object> range)
         {
             foreach (var it in range) items.Add(it);
+        }
+
+        protected override AccessibleObject CreateAccessibilityInstance() => new Accessible(this);
+
+        // A painted control tells screen readers nothing by itself: report it as a combo box with a value.
+        private sealed class Accessible : ControlAccessibleObject
+        {
+            private readonly ThemedDropDown dropDown;
+            public Accessible(ThemedDropDown dropDown) : base(dropDown) => this.dropDown = dropDown;
+            public override AccessibleRole Role => AccessibleRole.ComboBox;
+            public override string? Value => dropDown.SelectedItem?.ToString() ?? "nothing selected";
         }
 
         protected override void OnPaint(PaintEventArgs e)

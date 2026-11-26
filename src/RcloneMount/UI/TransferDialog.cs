@@ -55,6 +55,7 @@ namespace RcloneMount.UI
         // Names this dialog was opened with; shown when one of them is not in the remote list.
         private readonly string seedSourceName;
         private readonly string seedDestName;
+        private readonly bool remoteListRead; // false: a name not in `remotes` may still be configured
         private readonly Label lblMissingRemote;
         private readonly Button btnSave;
         private readonly Button btnStart;
@@ -79,9 +80,11 @@ namespace RcloneMount.UI
             string sourcePath,
             TransferOperation preselectedOp = TransferOperation.Copy,
             Action<TransferJob>? saveCallback = null,
-            TransferJob? existingJob = null)
+            TransferJob? existingJob = null,
+            bool remoteListRead = true)
         {
             this.remotes = remotes;
+            this.remoteListRead = remoteListRead;
             this.enqueueCallback = enqueueCallback;
             this.saveCallback = saveCallback;
             this.editingJobId = existingJob?.Id;
@@ -331,9 +334,11 @@ namespace RcloneMount.UI
             btnSave.Enabled = picked && saveCallback is not null;
         }
 
-        private static string MissingRemoteNote(ThemedDropDown cb, string side, string name)
+        private string MissingRemoteNote(ThemedDropDown cb, string side, string name)
         {
-            var note = cb.SelectedIndex >= 0 ? "" : $"{side} remote \"{name}\" is not in your rclone config. Pick another one.";
+            var note = cb.SelectedIndex >= 0 ? ""
+                : remoteListRead ? $"{side} remote \"{name}\" is not in your rclone config. Pick another one."
+                : $"{side} remote \"{name}\": the remote list could not be read. Click Refresh in the main window, then close and reopen this window.";
             cb.AccessibleDescription = note;
             return note;
         }

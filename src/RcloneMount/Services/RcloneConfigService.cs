@@ -310,6 +310,10 @@ namespace RcloneMount.Services
         // hung remote can't stall the UI thread.
         public async Task<TestConnectionResult> TestConnectionAsync(string remoteName, TimeSpan timeout, CancellationToken ct = default)
         {
+            // Without this the test reaches the local drive and reports success.
+            if (RcloneRemote.DriveLetterError(remoteName) is { } nameError)
+                throw new InvalidOperationException(nameError);
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
 

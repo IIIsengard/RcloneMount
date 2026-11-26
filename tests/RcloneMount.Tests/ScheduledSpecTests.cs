@@ -95,6 +95,21 @@ public class ScheduledSpecTests
     }
 
     [Fact]
+    public async Task OneLetterRemote_IsNotMounted_NorConnectionTested()
+    {
+        var exe = Path.Combine(TestIsolation.Dir, "no-rclone.exe");
+        using var mounts = new RcloneMountService(exe);
+
+        var mount = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => mounts.MountAsync(new Mount { RemoteName = "q", DriveLetter = "X:" }));
+        var test = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new RcloneConfigService(exe).TestConnectionAsync("q", TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("drive", mount.Message);
+        Assert.Contains("drive", test.Message);
+    }
+
+    [Fact]
     public void ExtraFlags_AppendedAfterFilterArgs()
     {
         var spec = MainForm.BuildSpecFromSaved(new TransferJob

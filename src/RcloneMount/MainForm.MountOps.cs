@@ -456,8 +456,7 @@ namespace RcloneMount
                 MessageBox.Show(this, "Configure at least one remote first.", "Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            var dlg = new TransferDialog(remotes, EnqueueJobRun, source.RemoteName, source.RemotePath ?? "", preselectedOp);
-            dlg.Show(this);
+            NewTransferDialog(source.RemoteName, source.RemotePath ?? "", preselectedOp).Show(this);
         }
 
         private void AddMountForSelectedRemote()

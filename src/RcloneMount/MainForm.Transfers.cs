@@ -294,28 +294,28 @@ namespace RcloneMount
             // Default source = first remote's root. User can pick another dest and
             // rename freely in the dialog.
             var seedSource = remotes[0].Name;
-            var dlg = new TransferDialog(remotes, EnqueueJobRun, seedSource, "",
-                preselectedOp: TransferOperation.Copy,
-                saveCallback: UpsertJob,
-                existingJob: null);
-            dlg.Show(this);
+            NewTransferDialog(seedSource, "", TransferOperation.Copy, UpsertJob).Show(this);
         }
 
         private void RunSavedJob(TransferJob job)
         {
             if (jobService is null) return;
             // One dialog per job: an older one would credit its run to settings saved in a newer one.
-            if (OwnedForms.OfType<TransferDialog>().FirstOrDefault(d => d.JobId == job.Id) is { } open)
+            if (OpenDialogFor(job.Id) is { } open)
             {
                 open.Activate();
                 return;
             }
-            var dlg = new TransferDialog(remotes, EnqueueJobRun, job.SourceRemote, job.SourcePath,
-                preselectedOp: ParseOp(job.Operation),
-                saveCallback: UpsertJob,
-                existingJob: job);
-            dlg.Show(this);
+            NewTransferDialog(job.SourceRemote, job.SourcePath, ParseOp(job.Operation), UpsertJob, job).Show(this);
         }
+
+        private TransferDialog? OpenDialogFor(string jobId) =>
+            OwnedForms.OfType<TransferDialog>().FirstOrDefault(d => d.JobId == jobId);
+
+        // The one place a TransferDialog is built, so every entry point passes the same state.
+        private TransferDialog NewTransferDialog(string sourceRemote, string sourcePath, TransferOperation op,
+            Action<TransferJob>? save = null, TransferJob? job = null) =>
+            new(remotes, EnqueueJobRun, sourceRemote, sourcePath, op, save, job, remoteListRead);
 
         // Bridge from the dialog to the queue. Kept as a method (rather than
         // a lambda at the call site) so all three dialog entry points route
@@ -586,11 +586,17 @@ namespace RcloneMount
 
         private void EditSavedJob(TransferJob job) => RunSavedJob(job);
 
+        // Set by tests: the real confirmation box is modal.
+        private Func<string, DialogResult>? confirmJobDelete = null;
+
         private async System.Threading.Tasks.Task DeleteSavedJobAsync(TransferJob job)
         {
-            if (ConfirmDialog.Show(this, "Delete job",
-                    $"Delete saved job '{(string.IsNullOrWhiteSpace(job.Name) ? "(unnamed)" : job.Name)}'?") != DialogResult.Yes)
+            var open = OpenDialogFor(job.Id);
+            var message = $"Delete saved job '{(string.IsNullOrWhiteSpace(job.Name) ? "(unnamed)" : job.Name)}'?"
+                + (open is null ? "" : "\nIts open window will close and unsaved changes there are lost.");
+            if ((confirmJobDelete?.Invoke(message) ?? ConfirmDialog.Show(this, "Delete job", message)) != DialogResult.Yes)
                 return;
+            open?.Close(); // left open, its Update button would add the job back
             jobs.RemoveAll(j => j.Id == job.Id);
             await SaveSettingsAsync();
             RefreshJobsList();

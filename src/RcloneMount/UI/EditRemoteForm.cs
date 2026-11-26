@@ -405,22 +405,22 @@ namespace RcloneMount.UI
             return invert ? !match : match;
         }
 
+        // Why the typed name can't be saved; null when it can.
+        internal string? NameError()
+        {
+            var name = RemoteName;
+            if (name.Length == 0) return "Remote name is required.";
+            if (!ValidNameRegex.IsMatch(name)) return @"Remote name cannot contain : \ / ? * "" < > |";
+            if (takenNames.Contains(name)) return $"A remote named '{name}' already exists.";
+            // A locked name cannot be changed here, so it must not block saving the other options.
+            return txtName.ReadOnly ? null : RcloneRemote.DriveLetterError(name);
+        }
+
         private void BtnOk_Click(object? sender, EventArgs e)
         {
-            var name = txtName.Text.Trim();
-            if (name.Length == 0)
+            if (NameError() is { } nameError)
             {
-                MessageBox.Show("Remote name is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            if (!ValidNameRegex.IsMatch(name))
-            {
-                MessageBox.Show(@"Remote name cannot contain : \ / ? * "" < > |", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            if (takenNames.Contains(name))
-            {
-                MessageBox.Show($"A remote named '{name}' already exists.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(nameError, "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 

@@ -323,10 +323,7 @@ public class UiTextTests
             Spec = new JobSpec(), JobId = "a", State = JobRunState.Failed, Outcome = "Failed to start",
             StartedUtc = done.AddSeconds(-1), FinishedUtc = done,
         };
-        // Recording saves settings: make that a no-op so the real settings.json is never written.
-        var readError = typeof(SettingsService).GetProperty(nameof(SettingsService.LoadReadError))!;
-        readError.SetValue(null, "test: do not save");
-        try
+        WithoutSaving(() =>
         {
             _ = form.Handle;
             Call(form, "OnJobRunFinished", run);
@@ -340,13 +337,110 @@ public class UiTextTests
             Call(form, "OnJobRunFinished", run);
             Application.DoEvents();
             Assert.Null(job.LastRunUtc);
-        }
-        finally
-        {
-            readError.SetValue(null, null);
             typeof(Control).GetMethod("DestroyHandle", Private)!.Invoke(form, null);
-        }
+        });
     });
+
+    [Theory]
+    [InlineData(DialogResult.Yes)]
+    [InlineData(DialogResult.No)]
+    public void DeletingAJobWithItsDialogOpen_SaysSo_AndClosesItOnlyOnYes(DialogResult answer) => Sta(() =>
+    {
+        var form = Shell();
+        var job = SavedJob();
+        var jobs = (List<TransferJob>)Get(form, "jobs")!;
+        jobs.Add(job);
+        using var open = new TransferDialog(new[] { new RcloneRemote { Name = "r", Type = "mega" } }, null, "r", "s",
+            saveCallback: _ => { }, existingJob: job);
+        open.Owner = form;
+        var asked = "";
+        Set(form, "confirmJobDelete", new Func<string, DialogResult>(message => { asked = message; return answer; }));
+
+        WithoutSaving(() => Call(form, "DeleteSavedJobAsync", job));
+
+        Assert.Contains("window", asked);
+        var deleted = answer == DialogResult.Yes;
+        Assert.Equal(deleted, open.IsDisposed); // a closed dialog cannot press Update and add the job back
+        Assert.Equal(deleted ? 0 : 1, jobs.Count);
+    });
+
+    [Fact]
+    public void DeletingAJobWithNoDialogOpen_DoesNotMentionAWindow() => Sta(() =>
+    {
+        var form = Shell();
+        var asked = "";
+        Set(form, "confirmJobDelete", new Func<string, DialogResult>(message => { asked = message; return DialogResult.No; }));
+
+        Call(form, "DeleteSavedJobAsync", SavedJob());
+
+        Assert.Contains("nightly", asked);
+        Assert.DoesNotContain("window", asked);
+    });
+
+    // "Not in your rclone config" is only true when the config was read.
+    [Fact]
+    public void TransferDialog_RemoteListUnread_DoesNotSayTheRemoteIsGone() => Sta(() =>
+    {
+        var form = Shell();
+        string Note()
+        {
+            using var dialog = (TransferDialog)typeof(MainForm).GetMethod("NewTransferDialog", Private)!.Invoke(form,
+                new object?[] { "gone", "s", TransferOperation.Copy, null, null })!;
+            Assert.False(((Button)Of(dialog, "btnStart")).Enabled);
+            return ((Label)Of(dialog, "lblMissingRemote")).Text;
+        }
+
+        var unread = Note();
+        Set(form, "remoteListRead", true);
+        var read = Note();
+
+        Assert.Contains("\"gone\"", unread);
+        Assert.Contains("could not be read", unread);
+        Assert.DoesNotContain("not in your rclone config", unread);
+        Assert.Contains("not in your rclone config", read);
+    });
+
+    [Fact]
+    public void ThemedDropDown_TellsScreenReadersTheSelection() => Sta(() =>
+    {
+        using var drop = new ThemedDropDown();
+        drop.AddItem("(Local disk)");
+
+        Assert.Equal(AccessibleRole.ComboBox, drop.AccessibilityObject.Role);
+        Assert.Equal("nothing selected", drop.AccessibilityObject.Value);
+        drop.SelectedIndex = 0;
+        Assert.Equal("(Local disk)", drop.AccessibilityObject.Value);
+        drop.ClearItems();
+        Assert.Equal("nothing selected", drop.AccessibilityObject.Value);
+    });
+
+    // Windows rclone reads "q:" as drive Q:, so such a name must not be saved.
+    [Theory]
+    [InlineData(null, "q", false, true)]   // new
+    [InlineData("ab", "Q", false, true)]   // rename
+    [InlineData("q", "q", false, true)]    // editing an old one: rename it
+    [InlineData("q", "q", true, false)]    // name locked (encrypted config): other edits still save
+    [InlineData(null, "qq", false, false)]
+    [InlineData(null, "1", false, false)]
+    public void EditRemoteForm_RejectsOneLetterNames(string? existing, string typed, bool locked, bool rejected) => Sta(() =>
+    {
+        using var form = new EditRemoteForm(new RcloneProvider { Name = "local" }, null, existing, Array.Empty<string>(), locked);
+        form.PresetRemoteName(typed);
+
+        var error = (string?)typeof(EditRemoteForm).GetMethod("NameError", Private)!.Invoke(form, null);
+
+        if (rejected) Assert.Contains("drive", error);
+        else Assert.Null(error);
+    });
+
+    // Some actions save settings: make that a no-op so the real settings.json is never written.
+    private static void WithoutSaving(Action body)
+    {
+        var readError = typeof(SettingsService).GetProperty(nameof(SettingsService.LoadReadError))!;
+        readError.SetValue(null, "test: do not save");
+        try { body(); }
+        finally { readError.SetValue(null, null); }
+    }
 
     private static TransferJob SavedJob() => new()
     {

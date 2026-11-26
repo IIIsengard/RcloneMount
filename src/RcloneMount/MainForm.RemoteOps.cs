@@ -141,6 +141,9 @@ namespace RcloneMount
             return mounts.Where(m => !known.Contains(m.RemoteName)).ToList();
         }
 
+        // Whether `remotes` holds the result of a successful last read.
+        private bool remoteListRead;
+
         // False when the remotes could not be read, so callers don't take "unknown" for "none".
         private async Task<bool> RefreshRemotesAsync()
         {
@@ -157,8 +160,12 @@ namespace RcloneMount
                 catch (InvalidOperationException ex) when (RcloneConfigPassword.IsPasswordError(ex.Message))
                 {
                     if (!await UnlockConfigAsync(tried))
+                    {
+                        remoteListRead = false;
                         return false;
+                    }
                 }
+                remoteListRead = true;
                 // Encryption removed (or never on): the stored password must not outlive it. Only
                 // a file read as plain counts; a locked or missing one keeps it for unattended jobs.
                 if (RcloneConfigPassword.ReadEncrypted(SettingsService.ResolveRcloneConfigPath()) == false)
@@ -169,6 +176,7 @@ namespace RcloneMount
             }
             catch (Exception ex)
             {
+                remoteListRead = false;
                 SetStatus($"Failed to read remotes: {ex.Message}");
                 return false;
             }

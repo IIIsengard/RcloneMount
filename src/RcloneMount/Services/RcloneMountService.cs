@@ -56,6 +56,8 @@ namespace RcloneMount.Services
 
             if (string.IsNullOrWhiteSpace(mount.RemoteName))
                 throw new InvalidOperationException("Mount has no remote configured.");
+            if (RcloneRemote.DriveLetterError(mount.RemoteName) is { } nameError)
+                throw new InvalidOperationException(nameError);
             if (string.IsNullOrWhiteSpace(mount.DriveLetter))
                 throw new InvalidOperationException("Mount has no drive letter configured.");
 

@@ -40,8 +40,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **A removed remote is no longer replaced by another one.** The transfer window selected
   local disk or the first remote instead. It now names the missing remote and waits for you
   to pick one before you can start or save.
-- **Jobs on a remote with a one-letter name are refused.** Windows reads `q:` as drive Q:, so
-  such a job worked on the local drive instead of the remote. Rename the remote.
+- **Remotes with a one-letter name are refused.** Windows reads `q:` as drive Q:, so a job,
+  mount or connection test used the local drive instead of the remote. Jobs, mounts and tests
+  now ask you to rename the remote, and new or renamed remotes need two or more characters.
+- **Deleting a job closes its open window**, so Update there can no longer bring the job back.
+- **Screen readers** now read the selected value of the app's drop-down lists.
+- **The transfer window no longer calls a remote missing when the remote list could not be
+  read.** It tells you to refresh instead.
 - **Every failed job shows its notification**, also when many jobs finish at once.
 - **A saved job opens in one window only.** Opening it again brings that window forward.
 - **Saving a new job twice no longer creates a duplicate.**
