@@ -528,6 +528,53 @@ public class SettingsSaveTests
         Assert.Equal("Dark", Saved().ThemePreference);
     }
 
+    // The UI thread asks this, so a hung "rclone config file" must be stopped, not waited for.
+    [Fact]
+    public void HungRcloneConfigFile_IsStopped_AndTheDefaultPathIsUsed()
+    {
+        var dir = Directory.CreateTempSubdirectory("rm-hung-").FullName;
+        var held = Path.Combine(dir, "held.txt");
+        var exe = Path.Combine(dir, "rclone.cmd");
+        File.WriteAllText(exe, "@echo off\r\nping -n 41 127.0.0.1 >\"%~dp0held.txt\"\r\n"); // ends by itself
+        SettingsService.SetRcloneExePath(exe);
+        try
+        {
+            var clock = Stopwatch.StartNew();
+
+            Assert.Equal(SettingsService.DefaultRcloneConfigPath, SettingsService.ResolveRcloneConfigPath());
+
+            Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(30)); // ping runs for 40
+            // ping holds the file open, so it can be deleted only once the whole tree is gone.
+            Assert.True(SpinWait.SpinUntil(() =>
+            {
+                try { File.Delete(held); return true; }
+                catch (IOException) { return false; }
+            }, TimeSpan.FromSeconds(5)), "the hung process is still running");
+        }
+        finally { SettingsService.SetRcloneExePath(null); }
+    }
+
+    // rclone.conf must never be written to a guessed place.
+    [Fact]
+    public async Task Restore_IsRefused_WhenRcloneDoesNotSayWhereItsConfigIs()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsService.RcloneConfigPathOverride!)!);
+        File.WriteAllText(SettingsService.RcloneConfigPathOverride!, "[a]\r\ntype = local\r\n");
+        var backup = await BackupOf(new AppSettings { ThemePreference = "Light" });
+        await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Dark" });
+        var exe = Path.Combine(Directory.CreateTempSubdirectory("rm-noconf-").FullName, "rclone.cmd");
+        File.WriteAllText(exe, "@exit /b 1\r\n");
+        SettingsService.SetRcloneExePath(exe);
+        try
+        {
+            var error = Assert.ThrowsAny<IOException>(() => SettingsService.RestoreFromBackup(backup));
+
+            Assert.Contains("nothing was restored", error.Message);
+            Assert.Equal("Dark", Saved().ThemePreference);
+        }
+        finally { SettingsService.SetRcloneExePath(null); }
+    }
+
     private static async Task<string> BackupOf(AppSettings settings)
     {
         await SettingsService.SaveAsync(settings);

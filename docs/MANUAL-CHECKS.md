@@ -142,12 +142,16 @@ Result: ____
 Expected: the last-run / next-run text does not run under the action buttons. UNCLEAR: reports give no width at which it overlaps.
 Result: ____
 
-**C6. Failed job balloon.** Steps: Notifications on. Run a job that fails (copy to a remote name that does not exist). Then give it `daily HH:MM` 2 minutes ahead and let it fail.
+**C6. Failed job balloon.** Steps: Notifications on. Run a job that fails (copy from a local folder that does not exist). Then give it `daily HH:MM` 2 minutes ahead and let it fail.
 Expected: balloon "Transfer job failed" with the job name and rclone's last error line (at most 150 characters). Scheduled failure: exactly one balloon, not repeated on later queue updates.
 Result: ____
 
 **C7. No balloon cases.** Steps: (a) Notifications off (Settings or tray silence), fail the job. (b) Notifications on, cancel a long running job from its row.
 Expected: (a) no balloon; activity log shows `Scheduled job '...' failed`. (b) row says Cancelled and no balloon.
+Result: ____
+
+**C8. Remote removed outside the app.** Steps: Notifications on. Save two jobs on a test remote, one with `daily HH:MM` 2 minutes ahead. Do not click Refresh. In the rclone terminal run `rclone config delete <name>` and wait for the scheduled time. Click Refresh twice. Create the remote again and press Run on a job.
+Expected: at the scheduled time nothing is transferred; one "Saved jobs stopped" balloon and one activity log line name both jobs; both rows say the remote is no longer in the rclone configuration; no new notice on Refresh; Run still asks you to pick a remote.
 Result: ____
 
 ---

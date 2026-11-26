@@ -689,18 +689,11 @@ namespace RcloneMount
 
             lblRcloneInstalled.Text = $"Installed: {rcloneInfo.Version}   —   {rcloneInfo.ExecutablePath}";
             lblRcloneInstalled.ForeColor = Theme.TextPrimary;
-            configService = new RcloneConfigService(rcloneInfo.ExecutablePath);
+            configService = new RcloneConfigService(rcloneInfo.ExecutablePath) { Warn = activityLog.Warn };
             mountService = new RcloneMountService(rcloneInfo.ExecutablePath);
             mountService.Remotes = () => remotes;
             jobService = new RcloneJobService(rcloneInfo.ExecutablePath);
-            // Keep a queue that still has active runs, or they vanish from the UI mid-transfer.
-            if (jobQueue is null || !jobQueue.Snapshot().Any(r => r.IsActive))
-            {
-                if (jobQueue is not null) { jobQueue.RunsChanged -= OnJobQueueChanged; jobQueue.RunFinished -= OnJobRunFinished; }
-                jobQueue = new JobQueueService(jobService, activityLog);
-                jobQueue.RunsChanged += OnJobQueueChanged;
-                jobQueue.RunFinished += OnJobRunFinished;
-            }
+            NewQueueIfIdle();
             // Let SettingsService resolve rclone.conf via `rclone config file` — respects
             // RCLONE_CONFIG and --config overrides instead of assuming the default path.
             SettingsService.SetRcloneExePath(rcloneInfo.ExecutablePath);
@@ -724,6 +717,21 @@ namespace RcloneMount
 
         // ── Existing flow (unchanged behavior) ────────────────────
 
+
+        // Keep a queue that still has active runs, or they vanish from the UI mid-transfer.
+        private void NewQueueIfIdle()
+        {
+            if (jobQueue is not null)
+            {
+                if (jobQueue.Snapshot().Any(r => r.IsActive)) return;
+                jobQueue.RunsChanged -= OnJobQueueChanged;
+                jobQueue.RunFinished -= OnJobRunFinished;
+            }
+            jobQueue = new JobQueueService(jobService!, activityLog);
+            jobQueue.CheckBeforeRun = run => InvokeAsync(async _ => await CheckRunRemotesAsync(run));
+            jobQueue.RunsChanged += OnJobQueueChanged;
+            jobQueue.RunFinished += OnJobRunFinished;
+        }
 
         private void MountService_MountExited(object? sender, MountExitedEventArgs e)
         {
@@ -798,7 +806,7 @@ namespace RcloneMount
                 rcloneInfo = info;
                 lblRcloneInstalled.Text = $"Installed: {info.Version}   —   {info.ExecutablePath}";
                 lblRcloneInstalled.ForeColor = Theme.TextPrimary;
-                configService = new RcloneConfigService(info.ExecutablePath);
+                configService = new RcloneConfigService(info.ExecutablePath) { Warn = activityLog.Warn };
                 SettingsService.SetRcloneExePath(info.ExecutablePath); // else rclone.conf resolves via the old (or no) exe
                 if (mountService is not null)
                 {
@@ -809,14 +817,7 @@ namespace RcloneMount
                 mountService.Remotes = () => remotes;
                 mountService.MountExited += MountService_MountExited;
                 jobService = new RcloneJobService(info.ExecutablePath);
-                // Keep a queue that still has active runs, or they vanish from the UI mid-transfer.
-                if (jobQueue is null || !jobQueue.Snapshot().Any(r => r.IsActive))
-                {
-                    if (jobQueue is not null) { jobQueue.RunsChanged -= OnJobQueueChanged; jobQueue.RunFinished -= OnJobRunFinished; }
-                    jobQueue = new JobQueueService(jobService, activityLog);
-                    jobQueue.RunsChanged += OnJobQueueChanged;
-                    jobQueue.RunFinished += OnJobRunFinished;
-                }
+                NewQueueIfIdle();
                 StartStatsPolling();
 
                 savedRclonePath = info.ExecutablePath;

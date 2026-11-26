@@ -42,10 +42,60 @@ public class JobServiceIntegrationTests
             DryRun = true,
         };
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // Only a guard against hanging, well past what a loaded PC needs. When it fires, rclone is told
+        // to quit and exits 0 with nothing reported.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         var result = await new RcloneJobService(exe).RunAsync(spec, new Progress<JobProgress>(), timeout.Token);
 
+        Assert.False(timeout.IsCancellationRequested, "rclone did not exit on its own");
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(2, result.DryRunActions!.Count);
+    }
+
+    // rclone exiting says nothing about its pipes: the last lines can still be on their way. Here a
+    // grandchild writes them a second after the fake rclone has gone, so the order is certain.
+    [Fact]
+    public async Task RunAsync_KeepsLinesThatArriveAfterRcloneExited()
+    {
+        var name = "late-" + Guid.NewGuid().ToString("N");
+        var exe = FakeRclone("start /b \"\" \"%~dp0late.cmd\"",
+            "ping -n 2 127.0.0.1 >nul",
+            $"echo 2026/01/01 00:00:00 NOTICE: {name}: Skipped copy as --dry-run is set (size 1)>&2",
+            $"echo 2026/01/01 00:00:00 INFO  : {name}: Copied (new)>&2");
+
+        // A long wait here, so a loaded PC cannot start the grandchild too late.
+        var service = new RcloneJobService(exe) { DrainWait = TimeSpan.FromSeconds(60) };
+        var result = await service.RunAsync(DryRunSpec, new Progress<JobProgress>(), CancellationToken.None);
+
+        Assert.Equal(name, Assert.Single(result.DryRunActions!).Path);
+        Assert.Contains("Copied (new)", result.StderrTail);
+        Assert.Contains(name, File.ReadAllText(TransferHistoryService.HistoryPath));
+    }
+
+    [Fact]
+    public async Task RunAsync_EndsWhenAGrandchildKeepsThePipeOpen()
+    {
+        var exe = FakeRclone("echo early>&2\r\nstart /b \"\" \"%~dp0late.cmd\"", "ping -n 41 127.0.0.1 >nul"); // ends by itself
+
+        var result = await new RcloneJobService(exe).RunAsync(DryRunSpec, new Progress<JobProgress>(), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("early", result.StderrTail);
+    }
+
+    private static JobSpec DryRunSpec => new()
+    {
+        Operation = TransferOperation.Copy, SourcePath = @"C:\src", DestPath = @"C:\dst", DryRun = true,
+    };
+
+    // A rclone.cmd that runs `main` and exits; `late` is the script it can leave running behind.
+    private static string FakeRclone(string main, params string[] late)
+    {
+        var dir = Directory.CreateTempSubdirectory("rm-fake-").FullName;
+        File.WriteAllText(Path.Combine(dir, "late.cmd"), "@echo off\r\n" + string.Join("\r\n", late) + "\r\n");
+        var exe = Path.Combine(dir, "rclone.cmd");
+        File.WriteAllText(exe, "@echo off\r\n" + main + "\r\nexit /b 0\r\n");
+        return exe;
     }
 }

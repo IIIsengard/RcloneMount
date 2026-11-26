@@ -30,6 +30,9 @@ namespace RcloneMount.Services
 
         public int MaxConcurrent { get; set; } = 1;
 
+        // Awaited just before a run starts rclone; throwing fails the run instead. Called off the UI thread.
+        internal Func<JobRun, Task>? CheckBeforeRun { get; set; }
+
         // Fires on any change to the runs list — added, state flip, removed.
         // Handlers should marshal to the UI thread themselves; the queue
         // fires from whatever thread happens to hold the gate at the time.
@@ -139,10 +142,11 @@ namespace RcloneMount.Services
 
         // Queued runs would fail under the old name, or reach a later remote that reuses it. Finished
         // ones change too, for Retry; a running rclone already has its arguments.
-        public void RenameRemote(string oldName, string newName)
+        public void RenameRemote(string oldName, string newName, Func<JobSpec, bool>? which = null)
         {
             lock (gate)
-                foreach (var run in runs) run.Spec = run.Spec.WithRemoteRenamed(oldName, newName);
+                foreach (var run in runs.Where(r => which?.Invoke(r.Spec) != false))
+                    run.Spec = run.Spec.WithRemoteRenamed(oldName, newName);
             RunsChanged?.Invoke();
         }
 
@@ -196,6 +200,7 @@ namespace RcloneMount.Services
             Exception? error = null;
             try
             {
+                if (CheckBeforeRun is { } check) await check(run).ConfigureAwait(false);
                 result = await jobService.RunAsync(run.Spec, progress, run.Cts!.Token, run.DisplayName).ConfigureAwait(false);
             }
             catch (Exception ex)

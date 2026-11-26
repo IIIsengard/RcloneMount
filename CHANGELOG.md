@@ -32,6 +32,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- A restore is refused when rclone does not say where its config file is,
+  instead of writing `rclone.conf` to the default folder.
+- Renaming a remote leaves jobs that use their own `--config` file unchanged.
 - `--unmount` now reports a failure when another rclone process still holds the
   drive, instead of saying it was unmounted.
 - The message after renaming a remote counts only the drives that came back.
@@ -188,6 +191,20 @@ changes (e.g. `settings.json` shape changes that need a migration).
 - **Deleting a remote cancels its queued and running transfers**, also those that reach it
   through a crypt, alias or union remote. A sync could keep deleting files after the remote
   was gone. The confirmation says so.
+- **Jobs stop when their remote is renamed or deleted outside the app**, for example in the
+  rclone terminal or by editing `rclone.conf`. They kept the old name and could later run
+  against a new remote that took it. The app now tells you which jobs stopped, and they wait
+  until you pick a remote again.
+- **A job does not start when its remote cannot be checked**, for example while `rclone.conf`
+  is locked or has no remotes at all. The run fails with the reason and your job is not changed.
+  A job with its own `--password-command` or `--config` still runs then, and rclone decides.
+  Jobs whose `--config` names a different file from the app's are not checked or stopped.
+- **A job does not run through a crypt, alias, union or other wrapping remote whose underlying
+  remote is gone.** The run fails and names the missing remote. `rclone.conf` is not changed.
+- **Remotes defined by environment variables** (`RCLONE_CONFIG_<NAME>_TYPE`) are no longer
+  called missing in the transfer window, and starting the app no longer removes their mounts.
+- **A hung rclone no longer holds the transfer queue** while the remote list is read: it is
+  stopped after 30 seconds and the run fails with the reason.
 - **A remote edit that fails remounts your drives.** If a rename or the update after it failed,
   the drives unmounted for the rename stayed down.
 - **`--unmount` tells Explorer the drive is gone** and shows your chosen drive letter at once.
@@ -198,6 +215,10 @@ changes (e.g. `settings.json` shape changes that need a migration).
   automatic remounting can bring it up later.
 - **A skipped automatic backup appears in the log**, for example while `rclone.conf` is locked
   by another program. Your settings are still saved.
+- **The end of a transfer's output is no longer lost.** A run could finish before the last
+  lines were read, leaving them out of the dry-run report, the History tab or the error text.
+- **A hung rclone no longer freezes the app while it looks up `rclone.conf`.** It is stopped
+  after 10 seconds and the default location is used.
 
 ### Added
 - **Support link.** The About tab and the README link to Buy Me a Coffee.

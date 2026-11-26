@@ -81,6 +81,10 @@ namespace RcloneMount.Services
             cachedRcloneConfigPath = null; // path changed → drop cached resolution
         }
 
+        // The UI thread can end up waiting this long. Not shorter: giving up means using the
+        // default path, and a busy PC can take seconds to start rclone.
+        private static readonly TimeSpan ConfigPathTimeout = TimeSpan.FromSeconds(10);
+
         // Asks rclone where its config file actually is. Falls back to the default
         // %AppData%\rclone\rclone.conf location when rclone.exe hasn't been located or
         // the invocation fails. Cached because "rclone config file" spawns a process.
@@ -104,14 +108,17 @@ namespace RcloneMount.Services
                     using var p = Process.Start(psi);
                     if (p is not null)
                     {
-                        var stdout = p.StandardOutput.ReadToEnd();
-                        p.WaitForExit(2000);
-                        if (p.ExitCode == 0)
+                        // Read in the background: a blocking read would outlast any timeout.
+                        var stdout = p.StandardOutput.ReadToEndAsync();
+                        var stderr = p.StandardError.ReadToEndAsync();
+                        if (!Task.WhenAll(stdout, stderr, p.WaitForExitAsync()).Wait(ConfigPathTimeout))
+                            p.Kill(entireProcessTree: true);
+                        else if (p.ExitCode == 0)
                         {
                             // Output looks like:
                             //   Configuration file is stored at:
                             //   C:\Users\me\AppData\Roaming\rclone\rclone.conf
-                            var last = stdout
+                            var last = stdout.Result
                                 .Split('\n', StringSplitOptions.RemoveEmptyEntries)
                                 .Select(l => l.Trim())
                                 .LastOrDefault(l => l.Length > 0);
@@ -127,6 +134,10 @@ namespace RcloneMount.Services
             }
             return DefaultRcloneConfigPath;
         }
+
+        // True when there is an rclone to ask and it has not said: the resolved path is then only a guess.
+        internal static bool RcloneConfigPathUnknown =>
+            cachedRcloneConfigPath is null && !string.IsNullOrWhiteSpace(knownRcloneExePath) && File.Exists(knownRcloneExePath);
 
         private static string LegacySettingsFilePath => Path.Combine(
             Path.GetDirectoryName(DataFolder)!,
@@ -489,7 +500,12 @@ namespace RcloneMount.Services
 
                 var rcloneEntry = zip.GetEntry("rclone.conf");
                 if (rcloneEntry is not null)
-                    files.Add((ResolveRcloneConfigPath(), System.Text.Encoding.UTF8.GetBytes(ReadEntryText(rcloneEntry))));
+                {
+                    var rcloneConfig = ResolveRcloneConfigPath();
+                    if (RcloneConfigPathUnknown)
+                        throw new IOException("rclone did not say where its config file is, so nothing was restored. Try again.");
+                    files.Add((rcloneConfig, System.Text.Encoding.UTF8.GetBytes(ReadEntryText(rcloneEntry))));
+                }
 
                 // Lifetime transfer counters — restore alongside so the number keeps its
                 // meaning after a machine migration.

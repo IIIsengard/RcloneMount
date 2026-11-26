@@ -51,7 +51,10 @@ public class VfsStatsTests
         try
         {
             int? idle = null;
-            for (var i = 0; i < 50 && idle is null; i++)
+            // Bounded by time, not tries: a try can fail in well under a second, and on a loaded
+            // PC all 50 ran out in 44 s while rclone was still starting.
+            var starting = Stopwatch.StartNew();
+            while (idle is null && starting.Elapsed < TimeSpan.FromSeconds(120))
             {
                 idle = await RcloneStatsPoller.FetchUploadsPendingAsync(rcPort);
                 if (idle is null) await Task.Delay(200);
@@ -61,7 +64,12 @@ public class VfsStatsTests
             using var dav = new HttpClient();
             (await dav.PutAsync($"http://127.0.0.1:{davPort}/a.txt", new StringContent("hello"))).EnsureSuccessStatusCode();
 
-            Assert.Equal(1, await RcloneStatsPoller.FetchUploadsPendingAsync(rcPort));
+            // On a loaded PC one request can pass the app's 2 s RC timeout: that reads as null ("unknown"),
+            // so ask again. The upload stays queued for the 60 s write-back.
+            int? pending = null;
+            for (var i = 0; i < 20 && pending is null; i++)
+                pending = await RcloneStatsPoller.FetchUploadsPendingAsync(rcPort);
+            Assert.Equal(1, pending);
         }
         finally
         {

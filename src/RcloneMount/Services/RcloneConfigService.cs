@@ -15,6 +15,16 @@ namespace RcloneMount.Services
     {
         private readonly string exePath;
 
+        // Longest wait for `config dump`, which may also run a password command. Settable for tests.
+        internal TimeSpan ListTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+        // Stops an rclone that outlived its timeout. Settable for tests.
+        internal Action<Process> Kill { get; init; } = proc => proc.Kill(entireProcessTree: true);
+
+        internal Action<string>? Warn { get; init; }
+
+        private static readonly TimeSpan DrainWait = TimeSpan.FromSeconds(2);
+
         public RcloneConfigService(string exePath)
         {
             this.exePath = exePath;
@@ -22,7 +32,7 @@ namespace RcloneMount.Services
 
         public async Task<IReadOnlyList<RcloneRemote>> ListRemotesAsync()
         {
-            var (stdout, stderr, exit) = await RunAsync("config", "dump").ConfigureAwait(false);
+            var (stdout, stderr, exit) = await RunAsync(ListTimeout, "config", "dump").ConfigureAwait(false);
             if (exit != 0)
                 throw new InvalidOperationException($"rclone config dump failed: {stderr}");
 
@@ -75,16 +85,59 @@ namespace RcloneMount.Services
             if (RcloneRemote.DriveLetterError(oldName) is not null) return value;
             if (key == "remote") return RepointSpec(value, oldName, newName);
             if (key != "upstreams") return value;
-            return Regex.Replace(value, @"""(?:[^""]|"""")*""|[^ ]+", match =>
+            return Regex.Replace(value, ListItem, match =>
             {
                 var raw = match.Value;
-                var quoted = raw.Length > 1 && raw[0] == '"' && raw[^1] == '"';
-                var item = quoted ? raw[1..^1].Replace("\"\"", "\"") : raw;
+                var item = Unquote(raw, out var quoted);
                 var start = type == "combine" ? item.IndexOf('=') + 1 : 0; // combine items are dir=remote:path
                 var changed = item[..start] + RepointSpec(item[start..], oldName, newName);
                 if (changed == item) return raw;
                 return quoted || changed.Contains(' ') ? "\"" + changed.Replace("\"", "\"\"") + "\"" : changed;
             });
+        }
+
+        private const string ListItem = @"""(?:[^""]|"""")*""|[^ ]+"; // one item of an "upstreams" list
+
+        private static string Unquote(string raw, out bool quoted)
+        {
+            quoted = raw.Length > 1 && raw[0] == '"' && raw[^1] == '"';
+            return quoted ? raw[1..^1].Replace("\"\"", "\"") : raw;
+        }
+
+        // The first remote that `remote` reaches through wrapper settings and `read` lacks; null when none.
+        // rclone takes such a setting from a flag, RCLONE_CONFIG_<NAME>_<KEY>, RCLONE_<TYPE>_<KEY>, then the config.
+        // shortcut: ":backend,remote=x:" and "name,remote=x:" overrides are not followed, add if jobs use them.
+        internal static string? MissingBehind(string remote, IReadOnlyCollection<RcloneRemote> read,
+            IReadOnlyCollection<string> flags, HashSet<string>? seen = null)
+        {
+            if (string.IsNullOrEmpty(remote) || remote[0] == ':' || RcloneRemote.DeletedName(remote) is not null) return null;
+            var name = remote.Split(',')[0];
+            if (!(seen ??= new HashSet<string>(StringComparer.Ordinal)).Add(name)) return null; // wrappers in a loop
+            var configured = read.FirstOrDefault(r => r.Name == name);
+            var type = RcloneRemote.FromEnvironment(name)?.Type ?? configured?.Type;
+            var key = type switch
+            {
+                "alias" or "archive" or "cache" or "chunker" or "compress" or "crypt" or "hasher" => "remote",
+                "combine" or "union" => "upstreams",
+                _ => null,
+            };
+            if (key is null || flags.Any(f => f.Split('=')[0] == $"--{type}-{key}")) return null;
+            var value = RcloneRemote.EnvironmentSetting($"RCLONE_CONFIG_{name}_{key}")
+                ?? RcloneRemote.EnvironmentSetting($"RCLONE_{type}_{key}")
+                ?? configured?.Parameters.GetValueOrDefault(key) ?? "";
+            var specs = key == "remote" ? new[] { value }
+                : Regex.Matches(value, ListItem).Select(m => Unquote(m.Value, out _))
+                    .Select(item => type == "combine" ? item[(item.IndexOf('=') + 1)..] : item).ToArray();
+            foreach (var spec in specs)
+            {
+                var colon = spec.IndexOf(':');
+                if (colon <= 0) continue; // a local path, or ":backend:"
+                var target = spec[..colon].Split(',')[0];
+                if (target.IndexOfAny(new[] { '/', '\\' }) >= 0 || RcloneRemote.DriveLetterError(target) is not null) continue;
+                if (RcloneRemote.IsMissing(target, read)) return target;
+                if (MissingBehind(target, read, flags, seen) is { } further) return further;
+            }
+            return null;
         }
 
         // "name:path", or "name,option=x:path" with settings overridden inline. Anything else is a local path.
@@ -504,7 +557,10 @@ namespace RcloneMount.Services
         internal static string DescribeFailure(string[] args, string stderr) =>
             $"rclone {string.Join(' ', args.Take(2))} failed: {stderr}";
 
-        private async Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(params string[] args)
+        private Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(params string[] args) =>
+            RunAsync(Timeout.InfiniteTimeSpan, args);
+
+        private async Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(TimeSpan timeout, params string[] args)
         {
             var psi = RcloneConfigPassword.StartInfo(exePath);
             foreach (var a in args)
@@ -513,7 +569,31 @@ namespace RcloneMount.Services
             using var proc = Process.Start(psi) ?? throw new IOException("Failed to start rclone.");
             var stdoutTask = proc.StandardOutput.ReadToEndAsync();
             var stderrTask = proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync().ConfigureAwait(false);
+            // The pipes too: a grandchild (password command) can keep them open after rclone exits.
+            var finished = Task.WhenAll(stdoutTask, stderrTask, proc.WaitForExitAsync());
+            try
+            {
+                await finished.WaitAsync(timeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                var command = $"rclone {string.Join(' ', args.Take(2))}";
+                var outcome = "was stopped";
+                try { Kill(proc); }
+                catch (Exception ex)
+                {
+                    outcome = "could not be stopped";
+                    Warn?.Invoke($"Could not stop {command} (process {proc.Id}): {ex.Message}");
+                }
+                // Let the readers end with the process; close the pipes if something still holds them open.
+                if (await Task.WhenAny(finished, Task.Delay(DrainWait)).ConfigureAwait(false) != finished)
+                {
+                    proc.StandardOutput.Dispose();
+                    proc.StandardError.Dispose();
+                }
+                _ = finished.ContinueWith(t => t.Exception, TaskScheduler.Default); // a closed pipe's error is expected
+                throw new TimeoutException($"{command} did not finish within {timeout.TotalSeconds:0.#} s and {outcome}.");
+            }
             return (await stdoutTask.ConfigureAwait(false), await stderrTask.ConfigureAwait(false), proc.ExitCode);
         }
     }

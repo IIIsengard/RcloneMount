@@ -123,7 +123,8 @@ public class VfsCacheLimitsTests
         var psi = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true };
         foreach (var x in new[] { "serve", "webdav", ".", "--vfs-cache-max-size", text, "-h" }) psi.ArgumentList.Add(x);
         using var p = System.Diagnostics.Process.Start(psi)!;
-        if (!p.WaitForExit(15000)) { p.Kill(true); Assert.Fail("rclone did not exit"); }
+        // Only a hang guard: on a loaded PC this has taken more than 15 s.
+        if (!p.WaitForExit(120_000)) { p.Kill(true); Assert.Fail("rclone did not exit"); }
         Assert.Equal(p.ExitCode == 0, VfsCacheLimits.ValidateSize(text) is null);
     }
 

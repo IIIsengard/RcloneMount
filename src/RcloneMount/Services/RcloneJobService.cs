@@ -146,6 +146,8 @@ namespace RcloneMount.Services
         // App-lifetime kill-on-close job: if the app exits or crashes, running transfers die
         // with it instead of carrying on unseen (Resume picks them up on next launch).
         private static readonly ChildProcessJob ChildJob = new();
+        // How long to wait, after rclone exits, for the last of its output.
+        internal TimeSpan DrainWait { get; init; } = TimeSpan.FromSeconds(5);
 
         private readonly string exePath;
 
@@ -334,6 +336,14 @@ namespace RcloneMount.Services
             var exit = await exitTcs.Task.ConfigureAwait(false);
             pollCts.Cancel();
             try { finalProgress = await pollTask.ConfigureAwait(false); } catch { }
+            // Exited can fire with output still in the pipes; WaitForExitAsync also waits for both
+            // readers. Bounded, because a grandchild can keep a pipe open after rclone is gone.
+            try { await proc.WaitForExitAsync().WaitAsync(DrainWait).ConfigureAwait(false); }
+            catch (TimeoutException)
+            {
+                proc.CancelOutputRead();
+                proc.CancelErrorRead();
+            }
             // Stop the periodic flush and drain any rows left in the queue —
             // the stderr thread may have enqueued lines between the last flush
             // and process exit.

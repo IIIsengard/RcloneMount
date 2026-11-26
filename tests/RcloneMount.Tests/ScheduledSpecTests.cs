@@ -67,10 +67,12 @@ public class ScheduledSpecTests
             DestRemote = missingSource ? "" : gone, DestPath = missingSource ? Path.Combine(local, "out") : "x",
             ExtraFlags = $"--config \"{Path.Combine(local, "empty.conf")}\"", // never the user's rclone config
         };
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Only a hang guard: on a loaded PC this has taken more than 30 s.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 
         var result = await new RcloneJobService(exe).RunAsync(MainForm.BuildSpecFromSaved(job), new Progress<JobProgress>(), timeout.Token, "missing-remote");
 
+        Assert.False(timeout.IsCancellationRequested, "rclone did not exit on its own");
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("didn't find section in config file", result.StderrTail);
         Assert.False(Directory.Exists(Path.Combine(local, "out")));

@@ -74,7 +74,7 @@ namespace RcloneMount.Models
         public bool InFlight { get; set; }
         public DateTime? InFlightStartedUtc { get; set; }
 
-        // Set when a remote this job uses was deleted: it does not run until a remote is picked again.
+        // Set when a remote this job uses left the configuration: it does not run until a remote is picked again.
         internal string? DeletedRemote() => RcloneRemote.DeletedName(SourceRemote) ?? RcloneRemote.DeletedName(DestRemote);
     }
 }
