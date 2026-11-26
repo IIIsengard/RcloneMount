@@ -389,7 +389,9 @@ public class UiTextTests
         var job = SavedJob(); // r to r
         var destOnly = new TransferJob { Id = "b", SourceRemote = "", DestRemote = "r" };
         var unrelated = new TransferJob { Id = "c", SourceRemote = "other", DestRemote = "R" };
-        jobs.AddRange(new[] { job, destOnly, unrelated });
+        // Its --config names another file, where "r" keeps its name.
+        var ownConfig = new TransferJob { Id = "d", SourceRemote = "r", DestRemote = "r", ExtraFlags = @"--config C:\elsewhere\rclone.conf" };
+        jobs.AddRange(new[] { job, destOnly, unrelated, ownConfig });
         var queue = IdleQueue();
         Set(form, "jobQueue", queue);
         queue.Enqueue(new JobSpec { SourceRemote = "r", SourcePath = "s", DestRemote = "other", DryRun = true, BwLimit = "1M" }, "queued", "a");
@@ -405,6 +407,7 @@ public class UiTextTests
         Assert.Equal(("new", "new"), (job.SourceRemote, job.DestRemote));
         Assert.Equal(("", "new"), (destOnly.SourceRemote, destOnly.DestRemote));
         Assert.Equal(("other", "R"), (unrelated.SourceRemote, unrelated.DestRemote));
+        Assert.Equal(("r", "r"), (ownConfig.SourceRemote, ownConfig.DestRemote));
         var run = Assert.Single(queue.Snapshot()).Spec;
         Assert.Equal(("new", "other", "s", true, "1M"), (run.SourceRemote, run.DestRemote, run.SourcePath, run.DryRun, run.BwLimit));
         Assert.Equal(new[] { "new", "other" }, ((IReadOnlyList<RcloneRemote>)Get(form, "remotes")!).Select(x => x.Name));

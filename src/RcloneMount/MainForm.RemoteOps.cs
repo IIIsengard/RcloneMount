@@ -169,7 +169,8 @@ namespace RcloneMount
                 }
                 // Encryption removed (or never on): the stored password must not outlive it. Only
                 // a file read as plain counts; a locked or missing one keeps it for unattended jobs.
-                if (RcloneConfigPassword.ReadEncrypted(SettingsService.ResolveRcloneConfigPath()) == false)
+                var configPath = SettingsService.ResolveRcloneConfigPath();
+                if (!SettingsService.RcloneConfigPathUnknown && RcloneConfigPassword.ReadEncrypted(configPath) == false)
                     RcloneConfigPassword.Clear();
                 RebuildRail();
                 SetStatus($"Loaded {remotes.Count} remote(s).");
@@ -484,7 +485,8 @@ namespace RcloneMount
         // open transfer windows. Whatever kept the old name would fail, or reach a later remote reusing it.
         private async Task ApplyRemoteRenameAsync(string oldName, string newName)
         {
-            var changed = RepointJobs(oldName, newName).Count > 0;
+            // Jobs, runs and windows whose --config names another file keep their names: nothing changed there.
+            var changed = RepointJobs(oldName, newName, job => !UsesOtherConfig(FlagsOf(job))).Count > 0;
             foreach (var m in mounts.Where(m => m.RemoteName == oldName))
             {
                 m.RemoteName = newName;
@@ -492,8 +494,8 @@ namespace RcloneMount
             }
             // A window opened before the next refresh must already see the new name.
             remotes = RcloneRemote.Renamed(remotes, oldName, newName);
-            jobQueue?.RenameRemote(oldName, newName);
-            foreach (var dialog in OwnedForms.OfType<TransferDialog>())
+            jobQueue?.RenameRemote(oldName, newName, spec => !UsesOtherConfig(spec.ExtraArgs));
+            foreach (var dialog in OwnedForms.OfType<TransferDialog>().Where(d => !UsesOtherConfig(d.ExtraFlags)))
                 dialog.RenameRemote(oldName, newName);
             RefreshJobsList();
             if (changed)

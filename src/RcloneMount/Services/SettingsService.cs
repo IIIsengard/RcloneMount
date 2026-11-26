@@ -135,6 +135,10 @@ namespace RcloneMount.Services
             return DefaultRcloneConfigPath;
         }
 
+        // True when there is an rclone to ask and it has not said: the resolved path is then only a guess.
+        internal static bool RcloneConfigPathUnknown =>
+            cachedRcloneConfigPath is null && !string.IsNullOrWhiteSpace(knownRcloneExePath) && File.Exists(knownRcloneExePath);
+
         private static string LegacySettingsFilePath => Path.Combine(
             Path.GetDirectoryName(DataFolder)!,
             LegacyAppFolderName,
@@ -496,7 +500,12 @@ namespace RcloneMount.Services
 
                 var rcloneEntry = zip.GetEntry("rclone.conf");
                 if (rcloneEntry is not null)
-                    files.Add((ResolveRcloneConfigPath(), System.Text.Encoding.UTF8.GetBytes(ReadEntryText(rcloneEntry))));
+                {
+                    var rcloneConfig = ResolveRcloneConfigPath();
+                    if (RcloneConfigPathUnknown)
+                        throw new IOException("rclone did not say where its config file is, so nothing was restored. Try again.");
+                    files.Add((rcloneConfig, System.Text.Encoding.UTF8.GetBytes(ReadEntryText(rcloneEntry))));
+                }
 
                 // Lifetime transfer counters — restore alongside so the number keeps its
                 // meaning after a machine migration.

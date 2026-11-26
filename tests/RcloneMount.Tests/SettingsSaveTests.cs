@@ -554,6 +554,27 @@ public class SettingsSaveTests
         finally { SettingsService.SetRcloneExePath(null); }
     }
 
+    // rclone.conf must never be written to a guessed place.
+    [Fact]
+    public async Task Restore_IsRefused_WhenRcloneDoesNotSayWhereItsConfigIs()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsService.RcloneConfigPathOverride!)!);
+        File.WriteAllText(SettingsService.RcloneConfigPathOverride!, "[a]\r\ntype = local\r\n");
+        var backup = await BackupOf(new AppSettings { ThemePreference = "Light" });
+        await SettingsService.SaveAsync(new AppSettings { ThemePreference = "Dark" });
+        var exe = Path.Combine(Directory.CreateTempSubdirectory("rm-noconf-").FullName, "rclone.cmd");
+        File.WriteAllText(exe, "@exit /b 1\r\n");
+        SettingsService.SetRcloneExePath(exe);
+        try
+        {
+            var error = Assert.ThrowsAny<IOException>(() => SettingsService.RestoreFromBackup(backup));
+
+            Assert.Contains("nothing was restored", error.Message);
+            Assert.Equal("Dark", Saved().ThemePreference);
+        }
+        finally { SettingsService.SetRcloneExePath(null); }
+    }
+
     private static async Task<string> BackupOf(AppSettings settings)
     {
         await SettingsService.SaveAsync(settings);

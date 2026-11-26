@@ -32,6 +32,9 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- A restore is refused when rclone does not say where its config file is,
+  instead of writing `rclone.conf` to the default folder.
+- Renaming a remote leaves jobs that use their own `--config` file unchanged.
 - `--unmount` now reports a failure when another rclone process still holds the
   drive, instead of saying it was unmounted.
 - The message after renaming a remote counts only the drives that came back.
