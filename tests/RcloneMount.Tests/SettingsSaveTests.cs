@@ -528,6 +528,32 @@ public class SettingsSaveTests
         Assert.Equal("Dark", Saved().ThemePreference);
     }
 
+    // The UI thread asks this, so a hung "rclone config file" must be stopped, not waited for.
+    [Fact]
+    public void HungRcloneConfigFile_IsStopped_AndTheDefaultPathIsUsed()
+    {
+        var dir = Directory.CreateTempSubdirectory("rm-hung-").FullName;
+        var held = Path.Combine(dir, "held.txt");
+        var exe = Path.Combine(dir, "rclone.cmd");
+        File.WriteAllText(exe, "@echo off\r\nping -n 41 127.0.0.1 >\"%~dp0held.txt\"\r\n"); // ends by itself
+        SettingsService.SetRcloneExePath(exe);
+        try
+        {
+            var clock = Stopwatch.StartNew();
+
+            Assert.Equal(SettingsService.DefaultRcloneConfigPath, SettingsService.ResolveRcloneConfigPath());
+
+            Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(20));
+            // ping holds the file open, so it can be deleted only once the whole tree is gone.
+            Assert.True(SpinWait.SpinUntil(() =>
+            {
+                try { File.Delete(held); return true; }
+                catch (IOException) { return false; }
+            }, TimeSpan.FromSeconds(5)), "the hung process is still running");
+        }
+        finally { SettingsService.SetRcloneExePath(null); }
+    }
+
     private static async Task<string> BackupOf(AppSettings settings)
     {
         await SettingsService.SaveAsync(settings);

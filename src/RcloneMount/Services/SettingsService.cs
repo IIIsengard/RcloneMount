@@ -81,6 +81,9 @@ namespace RcloneMount.Services
             cachedRcloneConfigPath = null; // path changed → drop cached resolution
         }
 
+        // The UI thread can end up waiting this long.
+        private static readonly TimeSpan ConfigPathTimeout = TimeSpan.FromSeconds(5);
+
         // Asks rclone where its config file actually is. Falls back to the default
         // %AppData%\rclone\rclone.conf location when rclone.exe hasn't been located or
         // the invocation fails. Cached because "rclone config file" spawns a process.
@@ -104,14 +107,17 @@ namespace RcloneMount.Services
                     using var p = Process.Start(psi);
                     if (p is not null)
                     {
-                        var stdout = p.StandardOutput.ReadToEnd();
-                        p.WaitForExit(2000);
-                        if (p.ExitCode == 0)
+                        // Read in the background: a blocking read would outlast any timeout.
+                        var stdout = p.StandardOutput.ReadToEndAsync();
+                        var stderr = p.StandardError.ReadToEndAsync();
+                        if (!Task.WhenAll(stdout, stderr, p.WaitForExitAsync()).Wait(ConfigPathTimeout))
+                            p.Kill(entireProcessTree: true);
+                        else if (p.ExitCode == 0)
                         {
                             // Output looks like:
                             //   Configuration file is stored at:
                             //   C:\Users\me\AppData\Roaming\rclone\rclone.conf
-                            var last = stdout
+                            var last = stdout.Result
                                 .Split('\n', StringSplitOptions.RemoveEmptyEntries)
                                 .Select(l => l.Trim())
                                 .LastOrDefault(l => l.Length > 0);

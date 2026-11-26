@@ -212,6 +212,10 @@ changes (e.g. `settings.json` shape changes that need a migration).
   automatic remounting can bring it up later.
 - **A skipped automatic backup appears in the log**, for example while `rclone.conf` is locked
   by another program. Your settings are still saved.
+- **The end of a transfer's output is no longer lost.** A run could finish before the last
+  lines were read, leaving them out of the dry-run report, the History tab or the error text.
+- **A hung rclone no longer freezes the app while it looks up `rclone.conf`.** It is stopped
+  after 5 seconds and the default location is used.
 
 ### Added
 - **Support link.** The About tab and the README link to Buy Me a Coffee.
