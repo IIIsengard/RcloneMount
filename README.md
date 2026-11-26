@@ -74,6 +74,20 @@ All files are in `%AppData%\RcloneMount\`:
 Remote definitions and their credentials stay in rclone's own `rclone.conf`. The backups contain
 a copy of it, so keep the backups folder private.
 
+## Privacy
+
+RcloneMount has no account, no telemetry and no analytics. Settings, logs and transfer totals stay on your PC.
+
+The app contacts the network only for updates, and only these hosts: `api.github.com` and `github.com` (releases of RcloneMount, rclone and WinFsp; the RcloneMount update feed; the rclone zip and the WinFsp installer are downloaded from the release pages there).
+
+- At startup, if **Check for Updates** is on in Settings (the default).
+- When you click Check or Install in Settings.
+- By itself, if **Auto-Install Updates** is on.
+
+These are ordinary HTTPS requests, so GitHub sees your IP address and the app name (User-Agent). Turn off **Check for Updates** to stop the startup check.
+
+rclone itself talks only to the cloud providers you set up. Their privacy terms apply to that traffic.
+
 ## Build
 
 You need the .NET 10 SDK. From the repo root:

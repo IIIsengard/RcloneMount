@@ -13,7 +13,7 @@ namespace RcloneMount
     public partial class MainForm
     {
         // About tab content — brand strip, license note, third-party components,
-        // privacy placeholder (filled when telemetry lands), and warranty disclaimer.
+        // privacy statement, and warranty disclaimer.
         // Layout uses the same section-header + card idiom as the Settings tab.
         private void BuildAboutTab(Panel root)
         {
@@ -157,19 +157,21 @@ namespace RcloneMount
                 lblWinFspName, lblWinFspLic, lnkWinFspSite, lnkWinFspRepo, lnkWinFspLic
             });
 
-            // ── Privacy section (placeholder until telemetry ships) ─
+            // ── Privacy section ────────────────────────────────────
             var hdrPrivacy = MakeSectionHeader("PRIVACY", 548);
-            var privacyCard = MakeSettingsCard("", new Point(12, 576), new Size(LayoutMetrics.CardFullWidth, 82), AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right);
+            var privacyCard = MakeSettingsCard("", new Point(12, 576), new Size(LayoutMetrics.CardFullWidth, 90), AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right);
             var lblPrivacy = MakeBody(
-                "RcloneMount does not currently collect or transmit any data. All settings, logs, and " +
-                "transfer totals stay on your machine. This section will describe any telemetry if it is " +
-                "introduced in a future release; enrolment will be opt-in.",
-                new Point(15, 14), new Size(1040, 60), secondary: true);
+                "RcloneMount has no account, telemetry or analytics. Settings, logs and transfer totals stay on this PC. " +
+                "The app contacts the network only for updates: github.com and api.github.com (RcloneMount, rclone and WinFsp releases). " +
+                "It does this at startup if \"Check for Updates\" in Settings is on, when you click Check or Install, and by itself if " +
+                "\"Auto-Install Updates\" is on. These are ordinary HTTPS requests, so GitHub sees your IP address and the app name " +
+                "(User-Agent). rclone talks only to the cloud providers you set up.",
+                new Point(15, 14), new Size(1040, 62), secondary: true);
             privacyCard.Controls.Add(lblPrivacy);
 
             // ── Support / diagnostics section ──────────────────────
-            var hdrSupport = MakeSectionHeader("SUPPORT & DIAGNOSTICS", 670);
-            var supportCard = MakeSettingsCard("", new Point(12, 698), new Size(LayoutMetrics.CardFullWidth, 116), AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right);
+            var hdrSupport = MakeSectionHeader("SUPPORT & DIAGNOSTICS", 684);
+            var supportCard = MakeSettingsCard("", new Point(12, 712), new Size(LayoutMetrics.CardFullWidth, 116), AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right);
             var lblSupport = MakeBody(
                 "Export a diagnostic bundle to attach to a bug report. Includes the activity log, " +
                 "settings, and version info. Excludes rclone.conf; ExtraFlags values that look like " +
@@ -197,8 +199,8 @@ namespace RcloneMount
             supportCard.Controls.Add(btnOpenLogsFolder);
 
             // ── Warranty / disclaimer section ──────────────────────
-            var hdrWarranty = MakeSectionHeader("WARRANTY", 826);
-            var warrantyCard = MakeSettingsCard("", new Point(12, 854), new Size(LayoutMetrics.CardFullWidth, 82), AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right);
+            var hdrWarranty = MakeSectionHeader("WARRANTY", 840);
+            var warrantyCard = MakeSettingsCard("", new Point(12, 868), new Size(LayoutMetrics.CardFullWidth, 82), AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right);
             var lblWarranty = MakeBody(
                 "This software is provided \"AS IS\", without warranty of any kind, express or implied. " +
                 "The authors and contributors are not liable for any claim, damages or other liability " +
