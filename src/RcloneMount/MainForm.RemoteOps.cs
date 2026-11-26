@@ -139,7 +139,7 @@ namespace RcloneMount
         {
             if (remotes.Count == 0) return new List<Mount>();
             var known = remotes.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
-            return mounts.Where(m => !known.Contains(m.RemoteName)).ToList();
+            return mounts.Where(m => !known.Contains(m.RemoteName) && RcloneRemote.FromEnvironment(m.RemoteName) is null).ToList();
         }
 
         // Whether `remotes` holds the result of a successful last read.
@@ -554,8 +554,8 @@ namespace RcloneMount
         {
             // No remotes at all is more likely a missing or wrong config file: runs are refused, jobs kept.
             if (read.Count == 0) return false;
-            // shortcut: a job with its own --config is not checked, but is marked if another job's check finds
-            // the same name gone; read that file if such jobs turn out to be used.
+            // shortcut: a job with its own --config or --password-command is not checked, but is marked if another
+            // job's check finds the same name gone; run its check with those flags if such jobs turn out to be used.
             var gone = jobs.Where(j => !RcloneRemote.UsesOwnConfig(RcloneMountService.SplitFlags(j.ExtraFlags ?? "")))
                 .SelectMany(j => new[] { j.SourceRemote, j.DestRemote })
                 .Where(name => RcloneRemote.IsMissing(name, read)).Distinct(StringComparer.Ordinal).ToList();
@@ -574,24 +574,38 @@ namespace RcloneMount
             return true;
         }
 
-        // The first configured remote the run names that `read` lacks. A run with its own --config reads another file.
-        private static string? MissingRemote(JobSpec spec, IReadOnlyList<RcloneRemote> read) =>
-            RcloneRemote.UsesOwnConfig(spec.ExtraArgs) ? null
-                : new[] { spec.SourceRemote, spec.DestRemote }.FirstOrDefault(name => RcloneRemote.IsMissing(name, read));
+        // Why `read` does not allow this run: a remote it names, or one behind a wrapper it names, is not there.
+        private static (string Reason, bool ViaWrapper)? Refusal(JobSpec spec, IReadOnlyList<RcloneRemote> read)
+        {
+            if (RcloneRemote.UsesOwnConfig(spec.ExtraArgs)) return null;
+            var sides = new[] { spec.SourceRemote, spec.DestRemote };
+            if (sides.FirstOrDefault(name => RcloneRemote.IsMissing(name, read)) is { } missing)
+                return ($"Not run: remote \"{missing}\" is not in rclone's configuration.", false);
+            foreach (var side in sides)
+                if (RcloneConfigService.MissingBehind(side, read, spec.ExtraArgs) is { } behind)
+                    return ($"Not run: remote \"{side}\" uses \"{behind}\", which is not in rclone's configuration.", true);
+            return null;
+        }
 
         // Called by the queue just before rclone starts, so a change made since the last Refresh is caught.
         // Throwing fails the run. Nothing is asked: an encrypted config needs its stored password.
         private async Task CheckRunRemotesAsync(JobRun run)
         {
-            if (MissingRemote(run.Spec, Array.Empty<RcloneRemote>()) is null) return; // nothing to look up
+            if (Refusal(run.Spec, Array.Empty<RcloneRemote>()) is null) return; // nothing to look up
 
             IReadOnlyList<RcloneRemote> read;
             int version;
             do
             {
-                while (remoteWritesActive > 0) await Task.Delay(100);
-                version = remoteWriteVersion;
                 var service = configService ?? throw new InvalidOperationException("Not run: rclone.exe was not found.");
+                var deadline = DateTime.UtcNow + service.ListTimeout;
+                while (remoteWritesActive > 0)
+                {
+                    if (DateTime.UtcNow > deadline)
+                        throw new InvalidOperationException("Not run: a remote rename or delete has not finished.");
+                    await Task.Delay(100);
+                }
+                version = remoteWriteVersion;
                 try { read = await service.ListRemotesAsync(); }
                 catch (Exception ex)
                 {
@@ -602,17 +616,21 @@ namespace RcloneMount
             while (remoteWritesActive > 0 || version != remoteWriteVersion);
 
             // Before marking, which renames this run's remote and cancels it.
-            var missing = MissingRemote(run.Spec, read);
+            var refusal = Refusal(run.Spec, read);
             if (await MarkMissingRemotesAsync(read))
             {
                 remotes = read;
                 remoteListRead = true;
                 RebuildRail();
             }
-            if (missing is null) return;
-            throw new InvalidOperationException(read.Count == 0
+            if (refusal is not { } no) return;
+            var reason = read.Count == 0
                 ? "Not run: rclone's configuration has no remotes. Check that rclone uses the right config file."
-                : $"Not run: remote \"{missing}\" is not in rclone's configuration.");
+                : no.Reason;
+            // Marking another job also cancels runs that wrap its remote, and a cancelled run shows no reason.
+            if (no.ViaWrapper && run.Cts?.IsCancellationRequested == true)
+                activityLog.Warn($"'{run.DisplayName}': {reason}");
+            throw new InvalidOperationException(reason);
         }
 
         // Queued and running transfers that reach `name`, directly or through a wrapper remote.

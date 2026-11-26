@@ -151,7 +151,7 @@ Expected: (a) no balloon; activity log shows `Scheduled job '...' failed`. (b) r
 Result: ____
 
 **C8. Remote removed outside the app.** Steps: Notifications on. Save two jobs on a test remote, one with `daily HH:MM` 2 minutes ahead. Do not click Refresh. In the rclone terminal run `rclone config delete <name>` and wait for the scheduled time. Click Refresh twice. Create the remote again and press Run on a job.
-Expected: at the scheduled time nothing is transferred; one "Saved jobs stopped" balloon and one activity log line name both jobs; both rows show the deleted remote; no new notice on Refresh; Run still asks you to pick a remote.
+Expected: at the scheduled time nothing is transferred; one "Saved jobs stopped" balloon and one activity log line name both jobs; both rows say the remote is no longer in the rclone configuration; no new notice on Refresh; Run still asks you to pick a remote.
 Result: ____
 
 ---

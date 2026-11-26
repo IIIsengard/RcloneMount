@@ -84,6 +84,8 @@ namespace RcloneMount.UI
             TransferJob? existingJob = null,
             bool remoteListRead = true)
         {
+            // A remote defined only by environment variables is not in the app's list, yet rclone has it.
+            remotes = RcloneRemote.WithEnvironmentRemotes(remotes, existingJob?.SourceRemote ?? sourceRemote, existingJob?.DestRemote);
             this.remotes = remotes;
             this.remoteListRead = remoteListRead;
             this.enqueueCallback = enqueueCallback;
@@ -370,7 +372,7 @@ namespace RcloneMount.UI
         private string MissingRemoteNote(ThemedDropDown cb, string side, string name)
         {
             var note = cb.SelectedIndex >= 0 ? ""
-                : RcloneRemote.DeletedName(name) is { } deleted ? $"{side} remote \"{deleted}\" was deleted. Pick another one."
+                : RcloneRemote.DeletedName(name) is { } deleted ? $"{side} remote \"{deleted}\" is no longer in the rclone configuration. Pick another one."
                 : remoteListRead ? $"{side} remote \"{name}\" is not in your rclone config. Pick another one."
                 : $"{side} remote \"{name}\": the remote list could not be read. Click Refresh in the main window, then close and reopen this window.";
             cb.AccessibleDescription = note;

@@ -194,6 +194,13 @@ changes (e.g. `settings.json` shape changes that need a migration).
   until you pick a remote again.
 - **A job does not start when its remote cannot be checked**, for example while `rclone.conf`
   is locked or has no remotes at all. The run fails with the reason and your job is not changed.
+  Jobs that pass their own `--config` or `--password-command` are not checked.
+- **A job does not run through a crypt, alias, union or other wrapping remote whose underlying
+  remote is gone.** The run fails and names the missing remote. `rclone.conf` is not changed.
+- **Remotes defined by environment variables** (`RCLONE_CONFIG_<NAME>_TYPE`) are no longer
+  called missing in the transfer window, and starting the app no longer removes their mounts.
+- **A hung rclone no longer holds the transfer queue** while the remote list is read: it is
+  stopped after 30 seconds and the run fails with the reason.
 - **A remote edit that fails remounts your drives.** If a rename or the update after it failed,
   the drives unmounted for the rename stayed down.
 - **`--unmount` tells Explorer the drive is gone** and shows your chosen drive letter at once.

@@ -108,7 +108,7 @@ namespace RcloneMount.UI
             lblRoute.ForeColor = Theme.TextSecondary;
             if (job.DeletedRemote() is { } deleted)
             {
-                lblRoute.Text = $"Not running: remote \"{deleted}\" was deleted. Edit to pick a remote.";
+                lblRoute.Text = $"Not running: remote \"{deleted}\" is no longer in the rclone configuration. Edit to pick one.";
                 lblRoute.ForeColor = Theme.Critical;
                 lblLast.Text = "";
             }

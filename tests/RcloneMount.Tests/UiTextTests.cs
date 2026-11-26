@@ -590,20 +590,20 @@ public class UiTextTests
         Assert.StartsWith("r (", ((ThemedDropDown)Of(open, "cbDestRemote")).SelectedText);
         Assert.False(((Button)Of(open, "btnStart")).Enabled);
         Assert.False(((Button)Of(open, "btnSave")).Enabled);
-        Assert.Contains("\"gone\" was deleted", ((Label)Of(open, "lblMissingRemote")).Text);
+        Assert.Contains("\"gone\" is no longer in the rclone configuration", ((Label)Of(open, "lblMissingRemote")).Text);
 
         // The name is created again: every way of running the saved job still refuses it.
         using var reopened = new TransferDialog(remotes, null, job.SourceRemote, "s", saveCallback: _ => { }, existingJob: job);
         Assert.Equal(-1, ((ThemedDropDown)Of(reopened, "cbSourceRemote")).SelectedIndex);
         Assert.False(((Button)Of(reopened, "btnStart")).Enabled);
-        Assert.Contains("\"gone\" was deleted", ((Label)Of(reopened, "lblMissingRemote")).Text);
+        Assert.Contains("\"gone\" is no longer in the rclone configuration", ((Label)Of(reopened, "lblMissingRemote")).Text);
         var error = Assert.Throws<InvalidOperationException>(() => new RcloneJobService(Path.Combine(TestIsolation.Dir, "no-rclone.exe"))
             .RunAsync(MainForm.BuildSpecFromSaved(job), new Progress<JobProgress>(), CancellationToken.None).GetAwaiter().GetResult());
-        Assert.Contains("was deleted", error.Message);
+        Assert.Contains("is no longer in the rclone configuration", error.Message);
 
         using var row = new JobRow();
         row.Bind(job);
-        Assert.Contains(All<Label>(row), l => l.Text.Contains("\"gone\" was deleted"));
+        Assert.Contains(All<Label>(row), l => l.Text.Contains("\"gone\" is no longer in the rclone configuration"));
         Assert.DoesNotContain(All<Label>(row), l => l.Text.Contains("next run"));
 
         // Picking a remote and saving brings it back.
@@ -780,6 +780,7 @@ public class UiTextTests
             new TransferJob { Id = "d", SourceRemote = ":sftp,host=x", DestRemote = "r,opt=1" },
             new TransferJob { Id = "e", SourceRemote = "elsewhere", ExtraFlags = "--config other.conf" },
             new TransferJob { Id = "f", SourceRemote = "elsewhere2", ExtraFlags = "--config=other.conf" },
+            new TransferJob { Id = "g", SourceRemote = "elsewhere3", ExtraFlags = "--password-command \"cmd /c echo x\"" },
         };
         var before = untouched.Select(j => (j.SourceRemote, j.DestRemote)).ToArray();
         ((List<TransferJob>)Get(form, "jobs")!).AddRange(untouched.Prepend(wrongCase).Prepend(job));
@@ -877,6 +878,8 @@ public class UiTextTests
         RunCheck(form, new JobSpec { SourcePath = @"C:\a", DestPath = @"C:\b" });
         RunCheck(form, new JobSpec { SourceRemote = ":local", DestRemote = RcloneRemote.MarkDeleted("x") });
         RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--config", "other.conf" } });
+        RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--password-command", "cmd /c echo x" } });
+        RunCheck(form, new JobSpec { SourceRemote = "mine", ExtraArgs = new[] { "--password-command=x" } });
         WithEnvironment("RCLONE_CONFIG_FROM-ENV_TYPE", "local",
             () => RunCheck(form, new JobSpec { SourceRemote = "From-Env", DestRemote = "from-env,opt=1" }));
     });
@@ -937,6 +940,155 @@ public class UiTextTests
             Assert.Equal("gone", gone.DeletedRemote());
         }));
     });
+
+    [Fact]
+    public void TransferWindow_TakesEnvironmentRemotes_AsConfigured() => Sta(() =>
+        WithEnvironment("RCLONE_CONFIG_FROM-ENV_TYPE", "local", () =>
+        {
+            var job = SavedJob();
+            (job.SourceRemote, job.DestRemote) = ("From-Env", "from-env,opt=1");
+            var started = new List<JobSpec>();
+            using var dialog = new TransferDialog(new[] { new RcloneRemote { Name = "r", Type = "mega" } },
+                (spec, _, _) => started.Add(spec), job.SourceRemote, job.SourcePath, saveCallback: _ => { }, existingJob: job);
+
+            Assert.Equal("", ((Label)Of(dialog, "lblMissingRemote")).Text);
+            Assert.True(((Button)Of(dialog, "btnStart")).Enabled);
+            Assert.True(((Button)Of(dialog, "btnSave")).Enabled);
+            Invoke(dialog, "StartAndClose", false);
+            Assert.Equal(("From-Env", "from-env,opt=1"), (started[0].SourceRemote, started[0].DestRemote));
+
+            // Opened from a mount, with no saved job.
+            using var fresh = new TransferDialog(Array.Empty<RcloneRemote>(), null, "From-Env", "");
+            Assert.StartsWith("From-Env (", ((ThemedDropDown)Of(fresh, "cbSourceRemote")).SelectedText);
+        }));
+
+    [Fact]
+    public void StartupPruning_KeepsAMountThatNamesAnEnvironmentRemote() =>
+        WithEnvironment("RCLONE_CONFIG_PRUNE-ENV_TYPE", "local", () =>
+        {
+            var gone = new Mount { RemoteName = "gone" };
+
+            var orphans = MainForm.OrphanedMounts(new[] { new Mount { RemoteName = "Prune-Env" }, gone },
+                new[] { new RcloneRemote { Name = "r" } });
+
+            Assert.Equal(new[] { gone }, orphans);
+        });
+
+    // A wrapper whose underlying remote is gone would reach whatever takes that name next.
+    [Theory]
+    [InlineData("crypt", "remote", "gone:secret")]
+    [InlineData("alias", "remote", "gone,opt=1:")]
+    [InlineData("chunker", "remote", "inner:sub")] // inner is an alias of gone
+    [InlineData("union", "upstreams", "r:a \"gone:with space:ro\"")]
+    [InlineData("combine", "upstreams", "a=r: b=gone:x")]
+    public void RunCheck_RefusesARunThroughAWrapperOfAMissingRemote(string type, string key, string value) => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Wrapped(type, key, value));
+        var job = SavedJob();
+        job.SourceRemote = "wrap";
+        ((List<TransferJob>)Get(form, "jobs")!).Add(job);
+
+        var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { SourceRemote = "r", DestRemote = "wrap" }));
+        Call(form, "RefreshRemotesAsync");
+
+        Assert.Equal("Not run: remote \"wrap\" uses \"gone\", which is not in rclone's configuration.", error.Message);
+        Assert.Equal("wrap", job.SourceRemote); // the job is kept: its own remote is still there
+        Assert.DoesNotContain(log, e => e.Level == ActivityLevel.Warn);
+    });
+
+    [Theory]
+    [InlineData("crypt", "remote", "r:secret")]
+    [InlineData("alias", "remote", @"C:\data")]
+    [InlineData("alias", "remote", @"\\server\share\a:b")]
+    [InlineData("alias", "remote", "/srv/a:b")]
+    [InlineData("alias", "remote", "folder")]
+    [InlineData("alias", "remote", ":local:x")]
+    [InlineData("alias", "remote", "wrap:loop")]
+    [InlineData("union", "upstreams", "r:a:ro D:\\x")]
+    [InlineData("combine", "upstreams", "a=r: \"b=C:\\two words\"")]
+    [InlineData("webdav", "remote", "gone:")] // not a wrapper
+    public void RunCheck_PassesAWrapperThatReachesNothingMissing(string type, string key, string value) => Sta(() =>
+    {
+        var (form, _) = RemoteShell(Wrapped(type, key, value));
+
+        RunCheck(form, new JobSpec { SourceRemote = "wrap" });
+    });
+
+    // rclone takes a wrapper's setting from a flag or the environment before the config file.
+    [Fact]
+    public void RunCheck_FollowsWrapperSettingsFromFlagsAndTheEnvironment() => Sta(() =>
+    {
+        var (form, _) = RemoteShell(Wrapped("alias", "remote", "gone:"));
+        var spec = new JobSpec { SourceRemote = "wrap" };
+
+        RunCheck(form, spec with { ExtraArgs = new[] { "--alias-remote", "r:" } });
+        RunCheck(form, spec with { ExtraArgs = new[] { "--alias-remote=r:" } });
+        WithEnvironment("RCLONE_CONFIG_WRAP_REMOTE", "r:", () => RunCheck(form, spec));
+        WithEnvironment("RCLONE_ALIAS_REMOTE", "r:", () => RunCheck(form, spec));
+        // A wrapper defined only by environment variables is followed too.
+        WithEnvironment("RCLONE_CONFIG_ENV-WRAP_TYPE", "alias", () => WithEnvironment("RCLONE_CONFIG_ENV-WRAP_REMOTE", "lost:",
+            () => Assert.Contains("uses \"lost\"",
+                Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { SourceRemote = "env-wrap" })).Message)));
+    });
+
+    // Marking another job cancels this run too, so the queue drops the reason: it must still be said.
+    [Fact]
+    public void RunCheck_SaysWhyAWrapperRunWasStopped_WhenMarkingCancelsIt() => Sta(() =>
+    {
+        var (form, log) = RemoteShell(Wrapped("alias", "remote", "gone:"));
+        var queue = IdleQueue();
+        Set(form, "jobQueue", queue);
+        ((List<TransferJob>)Get(form, "jobs")!).Add(new TransferJob { Id = "a", Name = "direct", SourceRemote = "gone" });
+        var run = queue.Enqueue(new JobSpec { SourceRemote = "wrap" }, "through wrapper");
+        using var cts = new CancellationTokenSource();
+        run.State = JobRunState.Running;
+        run.Cts = cts;
+        Set(form, "remotes", new[] { new RcloneRemote { Name = "wrap", Type = "alias", Parameters = { ["remote"] = "gone:" } } });
+
+        Assert.Throws<InvalidOperationException>(() => Call(form, "CheckRunRemotesAsync", run));
+
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Contains(log, e => e.Message.Contains("through wrapper") && e.Message.Contains("uses \"gone\""));
+    });
+
+    // A hung rclone must not hold the queue.
+    [Fact]
+    public void RunCheck_StopsAHungRclone_AndRefusesTheRun() => Sta(() =>
+    {
+        var (form, _) = RemoteShell("");
+        var rclone = FakeRclone(Dump("r"), "");
+        var done = Path.Combine(Path.GetDirectoryName(rclone)!, "done.txt");
+        File.WriteAllText(rclone, "@echo off\r\nping -n 4 127.0.0.1 >nul\r\necho x>\"%~dp0done.txt\"\r\n");
+        Set(form, "configService", new RcloneConfigService(rclone) { ListTimeout = TimeSpan.FromMilliseconds(500) });
+
+        var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { SourceRemote = "r" }));
+
+        Assert.Contains("did not finish", error.Message);
+        Thread.Sleep(4000); // past the ping: a process left running would write the file
+        Assert.False(File.Exists(done), "rclone was left running");
+    });
+
+    // Nor may a hung in-app rename or delete, which the check waits for.
+    [Fact]
+    public void RunCheck_GivesUpOnAnInAppChangeThatNeverEnds() => Sta(() =>
+    {
+        var (form, _) = RemoteShell("");
+        Set(form, "configService", new RcloneConfigService(FakeRclone(Dump("r"), "")) { ListTimeout = TimeSpan.FromMilliseconds(300) });
+        Set(form, "remoteWritesActive", 1);
+
+        var error = Assert.Throws<InvalidOperationException>(() => RunCheck(form, new JobSpec { SourceRemote = "r" }));
+
+        Assert.StartsWith("Not run", error.Message);
+    });
+
+    // "r", and "wrap" with one setting; "inner" is an alias of "gone".
+    private static string Wrapped(string type, string key, string value) =>
+        System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, Dictionary<string, string>>
+        {
+            ["r"] = new() { ["type"] = "local" },
+            ["inner"] = new() { ["type"] = "alias", ["remote"] = "gone:" },
+            ["wrap"] = new() { ["type"] = type, [key] = value },
+        });
 
     private static string Dump(params string[] names) =>
         "{" + string.Join(",", names.Select(n => $"\"{n}\":{{\"type\":\"local\"}}")) + "}";
