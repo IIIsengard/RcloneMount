@@ -60,7 +60,7 @@ Assumed load: one user, one process, on a PC that may have other programs and us
   Foundation for open-source projects; app is MIT; needs a public GitHub repo). Main rival:
   Rclone UI — win on reliability where it fails. No macOS/Linux/mobile.
 
-## Next session (2026-11-25): build + publish
+## Publish plan (written 2026-11-25; Tasks 15–22 are done)
 1. Get from user: OK to branch + commit a baseline; GitHub owner/name; results of manual checks
    (two launches, Restore, Exit with mounts, rclone terminal, Transfer dialog flags row, build menu).
 2. Commit baseline on a branch, then one commit per task.
@@ -112,3 +112,4 @@ Assumed load: one user, one process, on a PC that may have other programs and us
 | 22. Richer schedules | done (merged, manual check pending) | `daily`, `weekdays`, day lists, `every Nh`; v1.0 strings keep behaviour (oracle test); DST-safe next-run; error shown in the dialog and Save blocked. Review caught: editing a job mid-run left `InFlight` stuck. |
 | Final review | done | Whole-branch review (opus) of Phase 2 found 3 integration defects, all fixed in `8d0e3fa`: stats poller stayed bound to a disposed mount service after an rclone update (uploads count, keep-awake, shutdown hold silently stopped); a cancelled Windows shutdown left the app running with no tray/mounts/scheduler; an empty remote list deleted every mount at startup. Plus: banner link contrast, `every Nh` edit ran at once, totals save not atomic, Exit-guard exception left Exit dead. 273 tests, 0 warnings. **Parked:** stale `CloseReason` after a cancelled shutdown. **Not verified (manual):** shutdown hold/`WM_ENDSESSION` after "Shut down anyway", cancelled-shutdown trace, all new UI (banner, schedule dialog error label, mount editor, uploads dialog, password dialog). |
 | — | note | 2026-11-26: `session-clock` skill added (`~/.claude/skills/session-clock/`) with a `UserPromptSubmit` hook in this project's `.claude/settings.local.json`; wrap-up phase verified live. |
+| Publish prep | done (manual checks open) | 2026-11-26: Buy Me a Coffee link (About tab + README); `LICENSE` and notices ship with the app; `.vscode/settings.json` untracked (local auto-approve rules); 4 `cancel-test` rows removed from the local transfer history; public repo `IIIsengard/RcloneMount`. |

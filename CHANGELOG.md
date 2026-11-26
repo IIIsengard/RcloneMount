@@ -32,6 +32,8 @@ changes (e.g. `settings.json` shape changes that need a migration).
   another account could create it first and answer your scripts.
 
 ### Fixed
+- **"View LICENSE file" works in an installed copy.** The app now ships `LICENSE.txt` and
+  `THIRD-PARTY-NOTICES.md`.
 - **The About tab's privacy text was wrong.** It said the app transmits no
   data, but by default it checks GitHub for new RcloneMount, rclone and
   WinFsp releases at startup. The About tab and the README now say what is
@@ -116,6 +118,7 @@ changes (e.g. `settings.json` shape changes that need a migration).
   in place; only new rows are constructed, only vanished rows disposed.
 
 ### Added
+- **Support link.** The About tab and the README link to Buy Me a Coffee.
 - **Mounts no longer lose pending uploads.** Mount rows show "N uploads
   pending" while rclone still holds write-backs that are not in the cloud
   yet. Exit, Unmount, Remove mount, Restore, Locate rclone and both

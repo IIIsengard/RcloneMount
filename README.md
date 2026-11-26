@@ -136,6 +136,11 @@ A release builds and tests the app and sets the version in the project file. It 
 `[Unreleased]` notes under the new version heading. It writes `Setup.exe` and the portable zip
 to `dist\releases\`.
 
+## Support
+
+RcloneMount is free. If it helps you, you can
+[buy me a coffee](https://buymeacoffee.com/saulfosterv).
+
 ## License
 
 MIT. See [LICENSE](LICENSE). rclone and WinFsp are separate programs with their own licenses.

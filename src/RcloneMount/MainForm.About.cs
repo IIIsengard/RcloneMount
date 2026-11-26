@@ -90,7 +90,9 @@ namespace RcloneMount
                 ForeColor = Theme.TextTertiary,
                 BackColor = Color.Transparent
             };
-            brandCard.Controls.AddRange(new Control[] { brandIcon, brandName, brandVersion, brandTagline });
+            var lnkSupport = MakeLink("Support this app: Buy me a coffee", "https://buymeacoffee.com/saulfosterv", new Point(420, 54));
+            HookLink(lnkSupport);
+            brandCard.Controls.AddRange(new Control[] { brandIcon, brandName, brandVersion, brandTagline, lnkSupport });
 
             // ── License section ────────────────────────────────────
             var hdrLicense = MakeSectionHeader("LICENSE", 132);
@@ -99,10 +101,9 @@ namespace RcloneMount
                 "RcloneMount is released under the MIT License.\n" +
                 "Copyright © " + DateTime.Now.Year + " Saul Foster.",
                 new Point(15, 16), new Size(900, 44));
-            var lnkLicenseFile = MakeLink("View LICENSE file", "https://github.com/anthropics/claude-code/blob/main/LICENSE", new Point(15, 60));
-            // Local file link — resolves to the LICENSE file that ships with the repo.
-            lnkLicenseFile.Tag = "LICENSE";
-            lnkLicenseFile.LinkClicked += (_, _) => OpenLocalFileOrRepo("LICENSE");
+            var lnkLicenseFile = MakeLink("View LICENSE file", "LICENSE.txt", new Point(15, 60));
+            // Local file link — resolves to the LICENSE file that ships with the app.
+            lnkLicenseFile.LinkClicked += (_, _) => OpenLocalFileOrRepo("LICENSE.txt");
             licenseCard.Controls.Add(lblLicense);
             licenseCard.Controls.Add(lnkLicenseFile);
 

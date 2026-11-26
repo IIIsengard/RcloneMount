@@ -24,6 +24,9 @@ _ReSharper*/
 Thumbs.db
 Desktop.ini
 
+# VS Code local settings (terminal auto-approve rules)
+.vscode/
+
 # Claude Code local config (permissions carry paths from other projects)
 .claude/
 
